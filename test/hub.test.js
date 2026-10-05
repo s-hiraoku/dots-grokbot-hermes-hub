@@ -88,3 +88,73 @@ test("untracked legacy task database is preserved and refused", async () => {
     rmSync(dir, { recursive: true });
   }
 });
+for (const pending of [false, true])
+  test(`concurrent SQLite startup ${pending ? "pending migration" : "empty database"}`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hub-startup-"));
+    const path = join(dir, "hub.db");
+    if (pending) {
+      const h = new Hub(path);
+      h.sqlite.db.exec(
+        "DROP TRIGGER tasks_insert_audit; DROP TRIGGER tasks_update_audit; DROP TRIGGER tasks_terminal_outbox; DELETE FROM hub_migrations WHERE id='0001_audit_outbox.sql'",
+      );
+      h.close();
+    }
+    const workers = Array.from(
+      { length: 4 },
+      () =>
+        new Worker(new URL("./startup-worker.js", import.meta.url), {
+          workerData: { path },
+        }),
+    );
+    try {
+      await Promise.all(
+        workers.map(
+          (w) =>
+            new Promise((resolve, reject) => {
+              w.once("message", resolve);
+              w.once("error", reject);
+            }),
+        ),
+      );
+      const opened = workers.map(
+        (w) =>
+          new Promise((resolve, reject) => {
+            w.once("message", resolve);
+            w.once("error", reject);
+          }),
+      );
+      workers.forEach((w) => w.postMessage("go"));
+      assert.deepEqual(await Promise.all(opened), Array(4).fill("opened"));
+      const h = new Hub(path);
+      const task = await submit(h);
+      await finish(h, await h.claim(worker));
+      assert.equal((await h.get(owner, task)).state, "succeeded");
+      h.close();
+    } finally {
+      await Promise.all(workers.map((w) => w.terminate()));
+      rmSync(dir, { recursive: true });
+    }
+  });
+for (const operation of ["heartbeat", "complete"])
+  test(`${operation} checks lease at SQL application time`, async () => {
+    let now = 1000;
+    const h = new Hub(":memory:", () => now);
+    try {
+      await submit(h);
+      const task = await h.claim(worker);
+      now = task.lease - 1;
+      const batch = h.driver.batch.bind(h.driver);
+      h.driver.batch = async (statements) => {
+        now = task.lease + 1;
+        return batch(statements);
+      };
+      await assert.rejects(
+        operation === "heartbeat" ? h.heartbeat(worker, task) : finish(h, task),
+      );
+      const persisted = await h.get(worker, task);
+      assert.equal(persisted.state, "running");
+      assert.equal(persisted.lease, task.lease);
+    } finally {
+      h.close();
+    }
+  });

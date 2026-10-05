@@ -72,6 +72,7 @@ export interface Statement {
 }
 export type Row = Record<string, SQLValue>;
 export interface Driver {
+  readonly nowSQL: string;
   batch(statements: Statement[]): Promise<Row[][]>;
 }
 export interface Outbox {

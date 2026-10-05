@@ -1,6 +1,7 @@
 import { TaskService } from "./store.ts";
 import type { Driver, Statement, Row } from "./types.ts";
 export class D1Driver implements Driver {
+  readonly nowSQL = "CAST(unixepoch('subsec') * 1000 AS INTEGER)";
   readonly db: D1Database;
   constructor(db: D1Database) {
     this.db = db;

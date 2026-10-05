@@ -316,3 +316,53 @@ test("explicit local stop aborts waiting without inventing a remote stop operati
     h.close();
   }
 });
+test("abort during first heartbeat prevents Runs admission and preserves receipt", async () => {
+  const h = new Hub(),
+    j = journal(),
+    task = await submit(h),
+    runs = new MockRuns(),
+    controller = new AbortController();
+  const heartbeat = h.heartbeat.bind(h);
+  h.heartbeat = async (p, a) => {
+    const result = await heartbeat(p, a);
+    controller.abort();
+    return result;
+  };
+  try {
+    await assert.rejects(
+      new Adapter(h, worker, runs, j).once(controller.signal),
+      /worker_stopped/,
+    );
+    assert.equal(runs.calls, 0);
+    assert.ok(j.load());
+    assert.equal((await h.get(owner, task)).state, "running");
+    assert.equal((await h.get(owner, task)).execution_open, 1);
+  } finally {
+    h.close();
+  }
+});
+test("abort during final heartbeat prevents terminal commit and receipt clear", async () => {
+  const h = new Hub(),
+    j = journal(),
+    task = await submit(h),
+    runs = new MockRuns(),
+    controller = new AbortController();
+  const heartbeat = h.heartbeat.bind(h);
+  let calls = 0;
+  h.heartbeat = async (p, a) => {
+    const result = await heartbeat(p, a);
+    if (++calls === 2) controller.abort();
+    return result;
+  };
+  try {
+    await assert.rejects(
+      new Adapter(h, worker, runs, j).once(controller.signal),
+      /worker_stopped/,
+    );
+    assert.equal(runs.calls, 1);
+    assert.equal(j.load().run_id, "mock-1");
+    assert.equal((await h.get(owner, task)).state, "running");
+  } finally {
+    h.close();
+  }
+});

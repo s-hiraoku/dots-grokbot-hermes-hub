@@ -40,19 +40,14 @@ export async function storeSuite(t, h) {
     },
   );
   await check("expiry quarantine and stale fences fail closed", async () => {
-    let now = 100;
-    const original = h.now;
-    h.now = () => now;
-    try {
-      await submit(h);
-      const task = await h.claim(worker);
-      now += 30001;
-      assert.equal(await h.claim(worker), null);
-      assert.equal((await h.get(worker, task)).state, "waiting_approval");
-      await assert.rejects(finish(h, task));
-    } finally {
-      h.now = original;
-    }
+    await submit(h);
+    const task = await h.claim(worker);
+    await h.driver.batch([
+      { sql: "UPDATE tasks SET lease=0 WHERE id=?", params: [task.id] },
+    ]);
+    assert.equal(await h.claim(worker), null);
+    assert.equal((await h.get(worker, task)).state, "waiting_approval");
+    await assert.rejects(finish(h, task));
   });
   await check(
     "cancelled running task holds gate, queued cancel does not",

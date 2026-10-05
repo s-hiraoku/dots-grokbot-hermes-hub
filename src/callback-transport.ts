@@ -40,6 +40,13 @@ export const connectHTTPS: Connect = ({
         lookup: (_host, _options, callback) => callback(null, address, family),
       },
       (res) => {
+        const status = res.statusCode ?? 503;
+        // Permanent statuses need no response body; preserve their classification.
+        if (status >= 300 && status < 500 && status !== 429) {
+          resolve({ status, body: "" });
+          res.destroy();
+          return;
+        }
         const chunks: Buffer[] = [];
         let size = 0;
         res.on("data", (chunk: Buffer) => {

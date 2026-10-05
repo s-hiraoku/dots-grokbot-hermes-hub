@@ -80,7 +80,10 @@ export class Adapter {
     }
   }
   private async step(signal?: AbortSignal): Promise<string | null> {
-    if (signal?.aborted) throw new Error("worker_stopped_with_receipt");
+    const checkStop = () => {
+      if (signal?.aborted) throw new Error("worker_stopped_with_receipt");
+    };
+    checkStop();
     if (!this.runs.toolIsolationVerified || !this.runs.durableIdempotency)
       throw new Error("runner_boundary_unverified");
     const now = this.options.now ?? (() => Date.now());
@@ -103,6 +106,7 @@ export class Adapter {
       ["succeeded", "failed"].includes(task.state) &&
       task.execution_open === 0
     ) {
+      checkStop();
       this.journal.clear();
       return task.id;
     }
@@ -131,6 +135,7 @@ export class Adapter {
     const renew = () =>
       deadline(this.hub.heartbeat(this.principal, payload(receipt)), timeout);
     await renew();
+    checkStop();
     const controller = new AbortController();
     let lost: Error | undefined, renewing: Promise<void> | undefined;
     let rejectLease: (reason: Error) => void = () => {};
@@ -145,8 +150,7 @@ export class Adapter {
       rejectStop(new Error("worker_stopped_with_receipt"));
       controller.abort();
     };
-    if (signal?.aborted) stop();
-    else signal?.addEventListener("abort", stop, { once: true });
+    signal?.addEventListener("abort", stop, { once: true });
     const timer = setInterval(() => {
       if (renewing || lost) return;
       renewing = renew()
@@ -161,6 +165,7 @@ export class Adapter {
         });
     }, interval);
     try {
+      checkStop();
       const work = receipt.run_id
         ? this.runs.get(receipt.run_id, controller.signal)
         : this.runs.create({
@@ -175,8 +180,10 @@ export class Adapter {
       if (lost) throw lost;
       receipt.run_id = run.id;
       this.journal.save(receipt);
+      checkStop();
       await renew();
       if (lost) throw lost;
+      checkStop();
       if (run.state === "running") return task.id;
       const success = run.state === "succeeded" && run.text === RESPONSE;
       await this.hub.complete(this.principal, {
@@ -185,6 +192,7 @@ export class Adapter {
         state: success ? "succeeded" : "failed",
         result: success ? RESPONSE : "connectivity_check_failed",
       });
+      checkStop();
       this.journal.clear();
       return task.id;
     } finally {

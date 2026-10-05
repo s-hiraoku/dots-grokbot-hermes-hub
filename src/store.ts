@@ -78,22 +78,19 @@ export class TaskService {
     this.principal(p, "claim");
     if (p.worker !== "hermes" || Object.keys(a).length)
       throw new Error("forbidden");
-    const now = this.now(),
-      mutation = crypto.randomUUID();
+    const clock = this.driver.nowSQL;
+    const mutation = crypto.randomUUID();
     const r = await this.driver.batch([
       stmt(
-        "UPDATE tasks SET state='waiting_approval',fence=fence+1,lease=NULL,actor=?,at=?,mutation=? WHERE destination=? AND state='running' AND lease<=?",
+        `UPDATE tasks SET state='waiting_approval',fence=fence+1,lease=NULL,actor=?,at=${clock},mutation=? WHERE destination=? AND state='running' AND lease<=${clock}`,
         p.subject,
-        now,
         crypto.randomUUID(),
         p.worker,
-        now,
       ),
       stmt(
-        "UPDATE tasks SET state='running',execution_open=1,fence=fence+1,lease=?,actor=?,at=?,mutation=? WHERE id=(SELECT id FROM tasks WHERE destination=? AND state='queued' ORDER BY at,rowid LIMIT 1) AND NOT EXISTS(SELECT 1 FROM tasks WHERE destination=? AND execution_open=1)",
-        now + this.leaseMs,
+        `UPDATE tasks SET state='running',execution_open=1,fence=fence+1,lease=${clock}+?,actor=?,at=${clock},mutation=? WHERE id=(SELECT id FROM tasks WHERE destination=? AND state='queued' ORDER BY at,rowid LIMIT 1) AND NOT EXISTS(SELECT 1 FROM tasks WHERE destination=? AND execution_open=1)`,
+        this.leaseMs,
         p.subject,
-        now,
         mutation,
         p.worker,
         p.worker,
@@ -104,20 +101,18 @@ export class TaskService {
   }
   async heartbeat(p: Principal, a: Lease & { run_id?: string }) {
     this.principal(p, "heartbeat");
-    const now = this.now();
+    const clock = this.driver.nowSQL;
     const mutation = crypto.randomUUID();
     const r = await this.driver.batch([
       stmt(
-        "UPDATE tasks SET lease=?,run_id=COALESCE(run_id,?),actor=?,at=?,mutation=? WHERE id=? AND destination=? AND fence=? AND state='running' AND lease>? AND (? IS NULL OR run_id IS NULL OR run_id=?)",
-        now + this.leaseMs,
+        `UPDATE tasks SET lease=${clock}+?,run_id=COALESCE(run_id,?),actor=?,at=${clock},mutation=? WHERE id=? AND destination=? AND fence=? AND state='running' AND lease>${clock} AND (? IS NULL OR run_id IS NULL OR run_id=?)`,
+        this.leaseMs,
         a.run_id ?? null,
         p.subject,
-        now,
         mutation,
         a.id,
         p.worker ?? "",
         a.fence,
-        now,
         a.run_id ?? null,
         a.run_id ?? null,
       ),
@@ -137,19 +132,17 @@ export class TaskService {
         : a.result !== "connectivity_check_failed")
     )
       throw new Error("invalid_result");
-    const now = this.now();
+    const clock = this.driver.nowSQL;
     const r = await this.driver.batch([
       stmt(
-        "UPDATE tasks SET state=?,result=?,lease=NULL,execution_open=0,actor=?,at=?,mutation=? WHERE id=? AND destination=? AND fence=? AND state='running' AND lease>?",
+        `UPDATE tasks SET state=?,result=?,lease=NULL,execution_open=0,actor=?,at=${clock},mutation=? WHERE id=? AND destination=? AND fence=? AND state='running' AND lease>${clock}`,
         a.state,
         a.result,
         p.subject,
-        now,
         crypto.randomUUID(),
         a.id,
         p.worker ?? "",
         a.fence,
-        now,
       ),
       stmt(
         "SELECT * FROM tasks WHERE id=? AND destination=? AND fence=? AND state=? AND result=?",
