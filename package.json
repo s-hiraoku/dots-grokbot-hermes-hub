@@ -1,0 +1,24 @@
+{
+  "name": "agent-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/hub.js && node --check src/mcp.js && node --check src/adapter.js && node --check src/journal.js && node --check src/server.js",
+    "lint": "eslint src test",
+    "typecheck": "tsc --noEmit --strict --skipLibCheck docs/contracts.d.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^10.12.0",
+    "prettier": "^3.9.9",
+    "typescript": "^7.0.2"
+  }
+}
