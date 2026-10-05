@@ -22,7 +22,7 @@ Actual ChatGPT MCP Events are intentionally not advertised or registered. The [o
 
 ## Hermes source verification
 
-The local checkout matched commit `f97608f178d1ffeca59860195ab7da295f7c8e5f`. The requested `docs/user-guide/features/api-server.md` was absent there. `gateway/platforms/api_server_runs.py` implements /v1/runs, scoped Idempotency-Key admission/replay, and independent run IDs. `gateway/platforms/api_server.py` lists /v1/capabilities and /v1/toolsets. Agent creation selects platform toolsets from configuration; the API toolset regression test explicitly includes terminal by default. Passing `tools: []` to our mock is not evidence that the real Runs API enforces the same restriction.
+The local checkout matched commit `f97608f178d1ffeca59860195ab7da295f7c8e5f`. The document exists at `website/docs/user-guide/features/api-server.md` (the earlier `docs/...` locator was incomplete). It documents independent Runs, API-key authentication, and scoped durable idempotency with finite retention. `gateway/platforms/api_server_runs.py` implements /v1/runs, scoped Idempotency-Key admission/replay, and independent run IDs. `gateway/platforms/api_server.py` lists /v1/capabilities and /v1/toolsets. Agent creation selects platform toolsets from configuration; the API toolset regression test explicitly includes terminal by default. Passing `tools: []` to our mock is not evidence that the real Runs API enforces the same restriction.
 
 A listener at the previously reported port was not confirmed during this run. No auth files/values were read, no API call was sent, and no existing profile was modified. The real runner is blocked until tool exclusion, memory/session isolation, actual bind address and authentication are verified. The `toolIsolationVerified` interface is a test seam, not a security attestation for arbitrary production runners.
 
@@ -35,3 +35,5 @@ A listener at the previously reported port was not confirmed during this run. No
 5. Approve plugin registration and fixed verified event destinations after callback/signature/subscription security tests. Then perform a real fixed-payload roundtrip for each intended principal, revocation, restart, stale completion, notification retry, and cancellation checks.
 
 SDK choice: official Tier-1 TypeScript SDK, registry version 1.32.0, pinned in package-lock.json. [Official SDK catalog](https://modelcontextprotocol.io/docs/2026-07-28/sdk). SQL core and trusted-principal policy are separate from transport for later hosting migration.
+
+See [hosting migration plan](migration-plan.md) for the runtime boundary, one-store D1 design, and MCP Events prerequisites.
