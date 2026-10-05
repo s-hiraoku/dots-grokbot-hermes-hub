@@ -1,11 +1,17 @@
 # Dots · Grok Bot · Hermes Agent Hub
 
-Local phase-one foundation for mediating requests, assignments, progress, and results. Each agent retains its own decisions. No existing jobs, calendars, mail, memory, cron, or agent configuration are changed.
+Local foundation for mediating requests, assignments, progress and results. Each agent retains its own decisions. No existing jobs, calendars, mail, memory, cron or agent configuration are changed.
 
 ## Reproduce
 
-Requires Node 24. `npm ci && npm run check && npm run lint && npm run typecheck && npm test` exercises a dummy requester, outbound adapter, mock independent Runs service, persistent SQLite queue, and transactional outbox. `node src/server.js` starts a loopback HTTP MCP endpoint that returns 401 until a verified authentication boundary is implemented. It does not mint credentials or provide an anonymous mode.
+Node 24: `npm ci && npm run typecheck && npm run lint && npm test`.
 
-Only `connectivity_check` is accepted, with an idempotency key and no user text, agent name, shell command, URL, or personal data. The fixed successful output is `Agent Hub connectivity check completed.` Concurrency is one for Hermes. No real agent is contacted by these tests.
+Tests exercise a fixed requester → HTTP MCP → async task service → outbound adapter → mock independent Runs roundtrip with either SQLite or local Worker/D1. They also exercise lease renewal/failure, durable recovery, simultaneous claims, cancelled execution gating, transactional audit/outbox, and offline callback signatures/retries. Miniflare telemetry and Worker outbound access are disabled. `typecheck` checks the production TypeScript implementation and schema, not only declarations.
 
-See [architecture and approval gates](docs/architecture.md). This is an implementation foundation, not a production connection or deployment.
+`node src/server.ts` starts a loopback Node HTTP MCP endpoint that returns 401 until a verified authentication boundary is implemented. `npm run build` produces the analogous Worker bundle in ignored `dist/`; its default verifier also denies all requests. Neither entry point mints credentials or provides an anonymous mode.
+
+Only `connectivity_check` is accepted, with an idempotency key and no user text, agent name, shell command, URL or personal data. The fixed successful output is `Agent Hub connectivity check completed.` Hermes concurrency is one, including unresolved cancelled runs. Tests never contact a real agent or callback.
+
+The typed Hermes standard Runs driver is verified against a temporary mock HTTP API, including lost-admission recovery. It remains disabled for real instances until trusted execution-isolation evidence and runtime authentication are approved. See [first-connection contract](docs/hermes-connection.md).
+
+See [architecture and approval gates](docs/architecture.md) and [hosting and Events status](docs/migration-plan.md). This is locally validated code, not a deployed three-agent connection.
