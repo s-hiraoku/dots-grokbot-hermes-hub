@@ -169,6 +169,9 @@ for (const defect of [
             },
           }),
         ),
+        defect === "404"
+          ? /hermes_http_404/
+          : /pilot_capabilities_unverified/,
       );
       assert.equal(admissions, 0);
     } finally {

@@ -127,7 +127,7 @@ export const observePilot: ProcessProbe = async (pid, sourceRoot) => {
     exec("/bin/ps", ["-p", String(pid), "-o", "args="], opts),
     exec(
       "/usr/sbin/lsof",
-      ["-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
+      ["-n", "-P", "-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
       opts,
     ),
     exec(
