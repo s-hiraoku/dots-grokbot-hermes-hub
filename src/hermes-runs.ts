@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { PilotInspector } from "./pilot-inspector.ts";
+export const PILOT_INPUT = "Reply with exactly HUB_HERMES_OK.";
+export const PILOT_OUTPUT = "HUB_HERMES_OK";
 import {
   RESPONSE,
   RUN_ID_PATTERN,
@@ -43,6 +46,7 @@ const capabilities = z.object({
   object: z.literal("hermes.api_server.capabilities"),
   platform: z.literal("hermes-agent"),
   auth: z.object({ type: z.literal("bearer"), required: z.literal(true) }),
+  pilot_policy: z.unknown().optional(),
   features: z.object({
     run_submission: z.literal(true),
     run_status: z.literal(true),
@@ -59,7 +63,9 @@ export class HermesRuns implements Runs {
   #endpoint: URL;
   #verifiedUntil = 0;
   #retention = 0;
-  private constructor(options: HermesOptions) {
+  #pilot: boolean;
+  private constructor(options: HermesOptions, pilot = false) {
+    this.#pilot = pilot;
     this.#options = { ...options };
     this.#endpoint = new URL(options.endpoint);
     if (
@@ -84,7 +90,29 @@ export class HermesRuns implements Runs {
     await runs.verify();
     return runs;
   }
-  readonly admissionContract = "hermes-fixed-connectivity-v1";
+  static async connectPilot(
+    options: Omit<HermesOptions, "inspectIsolation"> & {
+      inspector: PilotInspector;
+    },
+  ) {
+    if (
+      !(options.inspector instanceof PilotInspector) ||
+      options.endpoint !== options.inspector.endpoint ||
+      options.scopeId !== options.inspector.scopeId
+    )
+      throw new Error("pilot_inspector_binding_rejected");
+    const runs = new HermesRuns(
+      { ...options, inspectIsolation: () => options.inspector.inspect() },
+      true,
+    );
+    await runs.verify();
+    return runs;
+  }
+  get admissionContract() {
+    return this.#pilot
+      ? "hermes-hub-fixed-pilot-v1"
+      : "hermes-fixed-connectivity-v1";
+  }
   get boundaryId() {
     return `${this.#endpoint.href}|${this.#options.scopeId}`;
   }
@@ -197,17 +225,39 @@ export class HermesRuns implements Runs {
       ),
     );
     if (!cap.success) throw new Error("hermes_capabilities_unverified");
-    // Inventory corroborates external effective-tool inspection, but cannot replace it.
-    const toolsets = z
-      .array(z.object({ enabled: z.boolean(), tools: z.array(z.string()) }))
-      .safeParse(
-        await this.request("/v1/toolsets", "GET", undefined, undefined, signal),
-      );
-    if (
-      !toolsets.success ||
-      toolsets.data.some((t) => t.enabled && t.tools.length)
-    )
-      throw new Error("hermes_tools_enabled");
+    if (this.#pilot) {
+      const pilotCap = z
+        .object({
+          pilot_policy: z
+            .object({
+              fixed_input: z.literal(PILOT_INPUT),
+              effective_tools: z.literal(0),
+              session_overrides: z.literal(false),
+              personal_context: z.literal(false),
+            })
+            .strict(),
+        })
+        .safeParse(cap.data);
+      if (!pilotCap.success) throw new Error("pilot_capabilities_unverified");
+    } else {
+      // Inventory corroborates external effective-tool inspection, but cannot replace it.
+      const toolsets = z
+        .array(z.object({ enabled: z.boolean(), tools: z.array(z.string()) }))
+        .safeParse(
+          await this.request(
+            "/v1/toolsets",
+            "GET",
+            undefined,
+            undefined,
+            signal,
+          ),
+        );
+      if (
+        !toolsets.success ||
+        toolsets.data.some((t) => t.enabled && t.tools.length)
+      )
+        throw new Error("hermes_tools_enabled");
+    }
     if (this.now() >= evidence.data.expiresAt)
       throw new Error("hermes_isolation_expired");
     const retention =
@@ -269,11 +319,13 @@ export class HermesRuns implements Runs {
         await this.request(
           "/v1/runs",
           "POST",
-          {
-            input: `Reply with exactly this text and nothing else: ${RESPONSE}`,
-            model: HERMES_MODEL,
-            provider: HERMES_PROVIDER,
-          },
+          this.#pilot
+            ? { input: PILOT_INPUT }
+            : {
+                input: `Reply with exactly this text and nothing else: ${RESPONSE}`,
+                model: HERMES_MODEL,
+                provider: HERMES_PROVIDER,
+              },
           input.idempotencyKey,
           input.signal,
         ),
@@ -312,7 +364,7 @@ export class HermesRuns implements Runs {
       return { id, state: "running" };
     if (
       run.status !== "completed" ||
-      run.output !== RESPONSE ||
+      run.output !== (this.#pilot ? PILOT_OUTPUT : RESPONSE) ||
       run.runtime?.model !== HERMES_MODEL ||
       run.runtime.provider !== HERMES_PROVIDER
     )

@@ -5,8 +5,10 @@ import {
   HERMES_MODEL,
   HERMES_PROVIDER,
   HERMES_COMMIT,
+  PILOT_INPUT,
+  PILOT_OUTPUT,
 } from "../src/hermes-runs.ts";
-export async function hermesFixture() {
+export async function hermesFixture(pilot = false) {
   const state = { calls: 0, requests: [], runs: new Map() };
   const server = createServer(async (req, res) => {
     if (req.headers.authorization !== "Bearer fixture-hermes") {
@@ -21,6 +23,16 @@ export async function hermesFixture() {
     };
     if (req.url === "/v1/capabilities")
       return send(200, {
+        ...(pilot
+          ? {
+              pilot_policy: {
+                fixed_input: PILOT_INPUT,
+                effective_tools: 0,
+                session_overrides: false,
+                personal_context: false,
+              },
+            }
+          : {}),
         object: "hermes.api_server.capabilities",
         platform: "hermes-agent",
         auth: { type: "bearer", required: true },
@@ -34,17 +46,22 @@ export async function hermesFixture() {
           },
         },
       });
-    if (req.url === "/v1/toolsets")
+    if (!pilot && req.url === "/v1/toolsets")
       return send(200, [{ enabled: false, tools: ["shell"] }]);
     if (req.url === "/v1/runs" && req.method === "POST") {
       let text = "";
       for await (const chunk of req) text += chunk;
       const payload = JSON.parse(text);
-      assert.deepEqual(payload, {
-        input: `Reply with exactly this text and nothing else: ${RESPONSE}`,
-        model: HERMES_MODEL,
-        provider: HERMES_PROVIDER,
-      });
+      assert.deepEqual(
+        payload,
+        pilot
+          ? { input: PILOT_INPUT }
+          : {
+              input: `Reply with exactly this text and nothing else: ${RESPONSE}`,
+              model: HERMES_MODEL,
+              provider: HERMES_PROVIDER,
+            },
+      );
       const key = req.headers["idempotency-key"];
       if (!state.runs.has(key)) {
         state.calls++;
@@ -57,7 +74,7 @@ export async function hermesFixture() {
         object: "hermes.run",
         run_id: req.url.split("/").at(-1),
         status: "completed",
-        output: RESPONSE,
+        output: pilot ? PILOT_OUTPUT : RESPONSE,
         runtime: { provider: HERMES_PROVIDER, model: HERMES_MODEL },
       });
     send(404, {});
