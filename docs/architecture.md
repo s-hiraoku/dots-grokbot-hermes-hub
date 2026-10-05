@@ -1,39 +1,45 @@
 # Scope and boundaries
 
-Dots handles personal context, consultation, important-mail decisions, mark-read after notification, and schedule summaries. Grok retains its existing connpass job and future Calendar/browser/long-task work. Hermes handles development experiments, MCP, and Skills. These roles are design context only: this version routes the single harmless task to Hermes using server-side principal policy. Results never submit new tasks.
+Dots retains personal context, consultation, important-mail decisions, mark-read after notification, and schedule summaries. Grok retains its existing connpass job and future Calendar/browser/long-task work. Hermes handles development experiments, MCP and Skills. These are design roles: this version accepts only a harmless connectivity task assigned to Hermes by verified server policy. Results and notifications never submit tasks.
 
-## Contracts
+## Authentication and tool contracts
 
-The SDK-backed stateless HTTP `POST /mcp` exposes submit, claim, heartbeat, complete, get, cancel. Strict schemas reject extra fields. `submit` accepts `{task_type: "connectivity_check", request_key}`. `claim` accepts `{}`. `get` and `cancel` take `{id}`. `heartbeat` takes `{id,fence,run_id?}`. `complete` takes `{id,fence,state,result}`, with only fixed success/failure values. Tool errors are generic. No caller supplies a destination or trusted agent identity.
+Both Node and Worker `POST /mcp` entry points use the pinned official MCP SDK. Strict schemas expose submit, claim, heartbeat, complete, get and cancel. No caller supplies a destination or trusted identity. Submit takes `{task_type:"connectivity_check",request_key}`; claim `{}`; get/cancel `{id}`; heartbeat `{id,fence,run_id?}`; complete `{id,fence,state,result}` with fixed success/failure results.
 
-A trusted authentication verifier must supply `{subject,operations,destination? ,worker?}`. The default verifier returns no identity. Request headers, including Sites identity headers, are not trusted on an arbitrary transport. A future Sites adapter must verify the hosting boundary and map its authenticated identity to policy. A service credential must not masquerade as a user. No public/no-auth fallback exists.
+A trusted verifier supplies `{subject,operations,destination?,worker?}`. Default verification returns no identity and HTTP 401. Header names, including Sites identity headers, are never automatically trusted. A future Sites integration must verify the hosting boundary and map authenticated users/services to distinct policy. No service credential may manufacture user identity or connected-app consent.
 
-## Queue and recovery
+## One state database, two storage drivers
 
-SQLite uses BEGIN IMMEDIATE transactions; D1 migration must preserve equivalent atomic SQL and cross-request concurrency semantics before deployment. This synchronous SQLite implementation is not a D1 adapter. Claim increments a fencing token and grants a 30-second lease. A second database connection cannot claim active work. Expired running work becomes waiting_approval with a new fence; automatic resubmission is prohibited. Cancel also increments the fence and retains an open execution slot for claimed work until reviewed remote reconciliation; it cannot admit another task merely because the local status is cancelled. Final status, audit entry, and outbox entry commit together. Request keys are scoped to the submitting principal; output event IDs remain stable across retries. Heartbeats persist a run ID and reject conflicting IDs.
+The async `TaskService` constructs the same prepared SQL operations for SQLite or D1; select one authoritative storage driver per deployment. There is no replication or dual-write between them. SQLite executes an operation's statements in BEGIN IMMEDIATE. D1 uses a primary-constrained session and transactional ordered batch. Conditional UPDATE predicates and a unique partial index enforce one unresolved execution per destination. There is no JavaScript SELECT-then-write claim race.
 
-The adapter accepts an injected Hub client and verified run service; it has no arbitrary HTTP endpoint configuration or shell execution. Journal must be persistent (`Journal`), written before run admission. An unknown admission response is reconciled by the same Runs idempotency key; a known run is read by ID. Operators must resolve expired leases before more work is admitted. This first version has no approval-resolution API: waiting_approval requires a reviewed implementation, not ad-hoc database edits. Cancel fences Hub completion but cannot stop an already accepted remote run until cancellation semantics are connected. An open slot stays blocked after cancellation; no release API is provided yet.
+`db/schema.ts` and generated Drizzle migrations own schema. Triggers persist state/run/lease audit and terminal outbox within the same transaction as the actual mutation. Terminal retries do not produce another mutation or event. Submission keys are scoped to owner. Heartbeats bind the run ID once and reject conflicts. Every completion requires the current lease/fence/worker; cancellation increments the fence. Lease expiry quarantines work in waiting_approval and retains its slot. Cancelled claimed work also retains the slot; queued cancellation does not reserve one.
 
-## Events
+The Mac's separate journal is a recovery receipt, not a second task-state database. It stores task ID, fence, stable admission key, run ID and admission time. It is committed before admission. Known runs are looked up by ID; unknown admissions replay the identical key only within the verified idempotency retention horizon. Existing prototype databases lacking migration metadata are refused with `legacy_schema_requires_reviewed_migration`, preserving their records for reviewed migration rather than silently replacing them.
 
-The transactional outbox is tested with an injected sink, including a lost acknowledgement and duplicate delivery. Delivery is at least once; receiver deduplication is required. The sink receives only task ID and terminal state. It cannot cause task submission.
+## Outbound worker lifecycle
 
-Actual ChatGPT MCP Events are intentionally not advertised or registered. The [official contract](https://developers.openai.com/plugins/build/mcp-events) requires events/list, events/subscribe, events/unsubscribe, verified callbacks, durable principal-scoped subscriptions, Standard Webhooks signatures, endpoint validation at connection time, and bounded retry rules. These remain a separate integration gate; an outbox alone is not MCP Events support. No caller-controlled webhook forwarding is implemented.
+`Adapter.once()` handles one admission/status step; `run()` polls until terminal while the receipt exists. A watchdog renews leases during blocked create/get calls, with a finite renewal deadline. Initial, periodic and final heartbeat payloads contain only protocol fields. Renewal failure or explicit local stop aborts local waiting and retains the receipt and execution slot for reconciliation. This does not imply stopping a remote run. The adapter rejects unsafe timing budgets and unverified tool-isolation/durable-idempotency contracts.
 
-## Hermes source verification
+Cancelled known work is read until the run driver confirms a terminal state. Unknown cancellation remains unresolved. Neither case silently clears the gate; authorized terminal reconciliation/release is not implemented. No guessed stop endpoint is called. The real driver and authentication bootstrap remain gated: mock booleans are test seams, not proof of actual tool or memory isolation.
 
-The local checkout matched commit `f97608f178d1ffeca59860195ab7da295f7c8e5f`. The document exists at `website/docs/user-guide/features/api-server.md` (the earlier `docs/...` locator was incomplete). It documents independent Runs, API-key authentication, and scoped durable idempotency with finite retention. `gateway/platforms/api_server_runs.py` implements /v1/runs, scoped Idempotency-Key admission/replay, and independent run IDs. `gateway/platforms/api_server.py` lists /v1/capabilities and /v1/toolsets. Agent creation selects platform toolsets from configuration; the API toolset regression test explicitly includes terminal by default. Passing `tools: []` to our mock is not evidence that the real Runs API enforces the same restriction.
+## Notification foundation
 
-A listener at the previously reported port was not confirmed during this run. No auth files/values were read, no API call was sent, and no existing profile was modified. The real runner is blocked until tool exclusion, memory/session isolation, actual bind address and authentication are verified. The `toolIsolationVerified` interface is a test seam, not a security attestation for arbitrary production runners.
+The transactional outbox is at least once; receivers must deduplicate stable event IDs. Offline-tested `EventSender` adds signed callback challenge verification, fixed terminal payloads, owner/access/expiry checks, bounded retry/backoff and 410/413/redirect policy rejection. `PinnedCallbackTransport` is a Node preparation adapter: exact approved URLs, HTTPS, fresh public-address validation at each connection, pinned DNS address and original TLS host, response bounds and no redirect following. The Worker egress adapter remains unimplemented.
 
-## Required approvals and next steps
+No events capability, subscription method, callback secret or delivery scheduler is installed. This is not formal MCP Events support; durable principal-scoped subscriptions, unsubscribe/cursor semantics and hosted delivery remain gates described in the [migration status](migration-plan.md).
 
-1. Approve an isolated Hermes configuration and its exact tool policy (zero shell, filesystem, browser, MCP, delegation, cron, personal memory), independent Runs sessions, loopback endpoint, identity scope, and fixed connectivity payload. Validate actual effective tool lists and negative execution tests before enabling a real adapter. Keep the existing desktop profile unchanged.
-2. Approve a private Sites target and D1 database, including any costs. Implement a D1 storage adapter and prove atomic claim/fencing with the hosted runtime. Verify user and worker/service identities remain distinct, including OAI-Sites-Authorization interoperability.
-3. Approve issuance/storage of minimal credentials separately: requester submit/get/cancel/events; worker claim/get/heartbeat/complete. No new persistent credential or OAuth token has been issued.
-4. Approve outbound Mac-to-Hub traffic, fixed target URL, fixed task data, and any automatic background worker. Current adapter tests run manually and locally.
-5. Approve plugin registration and fixed verified event destinations after callback/signature/subscription security tests. Then perform a real fixed-payload roundtrip for each intended principal, revocation, restart, stale completion, notification retry, and cancellation checks.
+## Hermes prerequisites
 
-SDK choice: official Tier-1 TypeScript SDK, registry version 1.32.0, pinned in package-lock.json. [Official SDK catalog](https://modelcontextprotocol.io/docs/2026-07-28/sdk). SQL core and trusted-principal policy are separate from transport for later hosting migration.
+The verified source commit was `f97608f178d1ffeca59860195ab7da295f7c8e5f`. Its document is `website/docs/user-guide/features/api-server.md`. It describes scoped Runs, capabilities/toolsets, API-key authentication and finite idempotency retention. Server agent creation uses platform toolsets; passing `tools: []` is not proof of real tool exclusion.
 
-See [hosting migration plan](migration-plan.md) for the runtime boundary, one-store D1 design, and MCP Events prerequisites.
+Desktop UI backend and standard gateway API are distinct interfaces. Do not assume an old desktop port exposes Runs. An approved isolated API profile must verify effective runtime tool definitions are empty, independent sessions/memory/history, durable idempotency, actual loopback binding and minimal authentication. Never extract desktop internal authentication for reuse.
+
+## Remaining approval and verification gates
+
+1. Isolated Hermes profile, key creation/storage and its exact endpoint/tool/memory policy; independent fixed-payload Runs. Keys must stay outside model context/chat/source/logs.
+2. Private Sites/D1 target, any costs, verified user/service auth separation and OAI-Sites-Authorization interoperability. Local D1/Worker success does not establish hosted behavior.
+3. Approved fixed outbound Mac-to-Hub traffic and any background worker. Current worker tests are manual and local.
+4. Authorized cancellation terminal reconciliation/gate release and real endpoint/status normalization; cloud revocation/lease/stop failure checks.
+5. Plugin registration and formally verified notification destinations after subscription/egress/replay security is complete.
+
+No deployment, Site or cloud D1 resource, new credential, real agent execution, subscription, plugin registration or background worker has occurred.

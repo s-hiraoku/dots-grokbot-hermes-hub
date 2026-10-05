@@ -1,56 +1,39 @@
-# Hosting migration preparation (not implemented)
+# Hosting and MCP Events status
 
-## Current readiness
+## Runtime choice and implemented migration
 
-The local foundation proves the six task operations, strict fixed-payload schemas, server-supplied principal policy, persistent state, lease fencing, and mock-run/outbox recovery. Its tests do not establish production authentication, D1 consistency, effective Hermes tool restrictions, subscription security, or hosted HTTP compatibility. A separate review is checking the existing implementation; do not merge or deploy on the strength of this document.
+The Sites portable setup guide specifies Cloudflare Workers-compatible server output and a 128 MB isolate budget. The storage guide requires D1 prepared statements, one statement per prepare, transactional batches, schema in `db/schema.ts` and generated migrations. Local-only work skips Site registration and publishing.
 
-The current runtime cannot be copied directly to a Worker-style Site: `node:sqlite`, local filesystem journals, `node:http` request/response transport, and synchronous transaction callbacks are Node-specific. The MCP callback currently assumes a synchronous Hub result. The outbound Hub wrapper accepts an already connected, authenticated official MCP client; a production transport/bootstrap and real Hermes Runs client are absent. The adapter consumes an injected run-service interface.
+The prior synchronous Node implementation has been replaced by a shared async SQL task service. `SQLiteDriver` and `D1Driver` implement atomic operation batches against one selected database. D1 reads are primary-constrained, claim uses conditional UPDATE, and a unique execution index covers active, quarantined and cancelled unresolved work. Audit/outbox triggers are generated as a schema-only custom migration. Migrations are not created by hosted request handlers.
 
-## Single authoritative task store
+The production Worker entry point uses the SDK's Web Standard HTTP transport and D1 binding. The Node entry point uses its Node HTTP transport and local SQLite. `npm run build` bundles only Worker runtime code; local journal, SQLite and Node callback egress are not part of that bundle. No `.openai/hosting.json` with a real Site identity exists. Site registration, private authentication boundary mapping, provisioning and upload are pending approval.
 
-Refactor the six operation contracts and authorization rules into an async service that delegates complete atomic operations to one storage implementation. Keep request validation and authorization shared. Inject either SQLite storage for local development or D1 storage for a hosted instance. Do not add a second queue, mirror SQLite into D1, or dual-write task states. The Mac journal is only a recovery receipt containing task ID, fence, idempotency key, and run ID; the Hub database remains authoritative.
+Local Miniflare/workerd validation includes the shared operation suite, 12 concurrent D1 claim attempts, atomic rollback, completion/cancel races, stale fences, authenticated fixture MCP/Adapter roundtrip, default 401 on forged identity headers, and persistent D1 reopen. Four independent Node worker threads separately contend for a single SQLite claim. Strict TypeScript checks cover production source/schema. These tests establish local behavior; hosted D1 consistency/auth and actual Sites service interoperability are not yet established.
 
-A generic `transaction(async callback)` shim is insufficient. The [D1 binding API](https://developers.cloudflare.com/d1/worker-api/d1-database/) provides prepared statements and a transactional `batch` whose ordered statements roll back together on failure. Build each operation as a static batch with SQL predicates, rather than reading state in JavaScript and later writing it. Await results in MCP tool callbacks. Do not attempt to carry BEGIN IMMEDIATE across separate remote awaits.
+Generated migrations and matching snapshots/journal are tracked in `drizzle/`. Do not rewrite applied migrations. Existing older prototype data requires reviewed migration; the new SQLite driver fails closed on an untracked legacy schema. No runtime data is part of the public repository.
 
-Proposed database constraints and execution rules:
+Sources: [D1 transactional batch API](https://developers.cloudflare.com/d1/worker-api/d1-database/), [official MCP SDK catalog](https://modelcontextprotocol.io/docs/2026-07-28/sdk). Miniflare is pinned to the current registry prerelease used for local tests; its fixture configuration uses the exported v4-options conversion helper and disables telemetry/outbound access.
 
-- Preserve unique `(owner,request_key)` and stable event IDs. Persist immutable task type/destination and a canonical request fingerprint before extending the allowlisted task types.
-- Add a unique partial index on destination for `execution_open=1`; this enforces the single unresolved execution slot, including cancelled work awaiting remote reconciliation, in the database itself.
-- Claim performs expiry quarantine, then one conditional `UPDATE ... RETURNING` of the oldest queued row only when no unresolved row exists. Fence increment and lease issuance belong to that update. Never return a successful claim from a preliminary SELECT.
-- Heartbeat and completion predicate on task ID, verified worker assignment, current fence, current state, and nonexpired lease. Derive time at the server. Result replay must be authorized against immutable assignment and its successful completion fence.
-- Cancel predicates on submitting principal, increments the fence, and records the transition. The local implementation retains `execution_open=1` for claimed work after cancel, blocking new admission while the old run may still execute. Remote stop/reconciliation and an authorized release operation remain required before real workers.
-- Record audit and outbox from the actual changed rows in the same batch, with an operation correlation ID or a tested database trigger design. A zero-row stale update must produce neither a false audit transition nor a notification. Do not use connection-scoped `changes()` across independent requests.
-- Final read and response must be tied to the same operation; review D1 read-replication/session guarantees before allowing replica reads in authorization, claim, or completion.
+## Worker recovery implemented and still gated
 
-Before calling this a D1 adapter, execute the shared operation suite against a local Worker/D1 emulator with concurrent claim attempts, forced batch rollback, completion/cancel races, lease-boundary timing, repeated result replay, restart, and outbox failure. Cloud D1 validation remains a separate approved step. The pinned SDK's Fetch/Worker transport must also be checked against the actual Sites runtime; use a Fetch request/response bridge or a compatible SDK transport rather than exposing Node HTTP objects.
+The adapter now renews leases while waiting for Runs create/get, polls known runs, applies a finite heartbeat deadline, keeps durable receipts on renewal failure or local stop, and refuses unknown-admission replay beyond the verified idempotency horizon. Simulated multiple lease windows, hung/failed renewals, known active run reopen and lost-admission reopen are tested. No remote stop call is inferred from local abort.
 
-## Real worker recovery gaps
+The real Runs client remains unimplemented pending the approved isolated profile and effective tool/memory/durable-idempotency evidence. Standard API requires its own key even on loopback. Desktop UI backend authentication and changing port must not be reused. `toolIsolationVerified`/`durableIdempotency` are injected mock contract flags; they do not constitute a real security attestation. Actual capabilities must rule out memory-only idempotency fallback.
 
-`website/docs/user-guide/features/api-server.md` in the verified Hermes commit documents GET capabilities/toolsets, scoped Runs, and an Idempotency-Key retention period of 24 hours after last status update. Unknown-admission replay must not occur after the verified retention horizon: the worker needs a persisted admission timestamp/deadline and must quarantine uncertain work beyond that deadline. It also needs run-status normalization, durable leases during polling, safe journal permissions, revocation behavior, stop acknowledgement/reconciliation, and verified zero-tool execution. A test runner's `toolIsolationVerified` boolean is not a production trust boundary.
+Cancellation keeps the task's execution slot even after a mock terminal confirmation. An authorized server operation to verify reconciliation and release the slot is still required. Do not allow requester arguments or an unverified driver to release it. Actual Stop semantics, endpoint/status normalization and hosted credential revocation remain untested.
 
-The real port, capabilities, auth behavior, and effective tool restriction remain unverified here. The separate read-only Hermes investigation should resolve these before implementation chooses an isolated runner configuration.
+## MCP Events preparation implemented
 
-## Formal MCP Events
+`EventSender` is an offline protocol foundation matching the [official MCP Events guide](https://developers.openai.com/plugins/build/mcp-events): Standard Webhooks signature headers, unique verification challenges, constant-time comparison, bounded verification lifetime, owner/filter/expiry checks, exact event bytes and stable retry IDs, fresh retry timestamps, finite attempts/backoff and stop on 410/413. Payload contains only task ID and terminal state, with no behavioral instruction or task-submission path.
 
-The existing outbox is an internal delivery foundation; it must not advertise Events support until the [official MCP Events contract](https://developers.openai.com/plugins/build/mcp-events) is implemented and tested.
+`PinnedCallbackTransport` is a Node-only preparation boundary, tested with injected resolver/connector: only exact approved HTTPS URLs, no URL credentials, fresh DNS/public-IP classification on every attempt, all resolved addresses checked, pinned address plus original TLS hostname, bounded callback response and redirect rejection. Tests perform no real DNS lookup or callback connection. This Node egress implementation is not evidence of equivalent Worker egress; a hosted connection-time address/pinning boundary is still required.
 
-Use the same authoritative D1 database for subscriptions and per-subscription delivery receipts. Preserve the original terminal event once, and create delivery receipts keyed by event ID and subscription ID; receipts track delivery only and never duplicate task states. Stop delivery on revoked principal access, unsubscribe, or expiry. An event cannot submit a task or resume an execution.
+Before advertising formal events support, implement and test:
 
-Needed protocol and security work:
+- Authenticated server/discover, events/list, events/subscribe and events/unsubscribe with strict principal/task filters and deterministic subscription identity.
+- Durable subscriptions, encrypted/approved signing-secret references and per-subscription delivery receipts in the same authoritative D1 database; no second task-state DB.
+- Expiry/refresh/revocation/unsubscribe races, replay cursors and per-delivery authorization. Outbox receipts alone are not a subscription lifecycle.
+- Approved fixed callback targets and verified hosted egress. Verification and delivery must use the same SSRF/redirect safeguards.
+- Receiver crash/ack-loss integration, delivery-state restart and real signatures through an approved callback/plugin connection.
 
-1. Authenticated server discovery, events/list, events/subscribe, events/unsubscribe; strict terminal-state payloads containing only task ID and state. Expose an owner/task filter rather than caller-selected routing identities.
-2. Principal-scoped deterministic subscription identity, requested lifetime handling, durable cursor/replay semantics, and per-delivery authorization rechecks.
-3. A trusted configured destination allowlist plus HTTPS and address validation at each connection; block private/local addresses, prevent DNS-rebinding gaps, and forbid redirects. Validate verification traffic as strictly as event traffic. Until that boundary is proven, reject subscriptions instead of forwarding.
-4. Fresh, single-use callback challenges and constant-time response comparison before subscription activation. Store signing secrets only in an approved secret store; never in logs or public source.
-5. Standard Webhooks signatures over exact serialized bytes, stable event IDs, fresh timestamps on retries, bounded attempts/backoff, and response-specific termination (410/413). Receiver idempotency remains necessary.
-6. Tests for forged identity, cross-owner subscription lookup, verification failure, duplicate subscribe, expiry/revocation, unsubscribe races, DNS/redirect rejection, signature checks, retry loss, and delivery restart.
-
-No Site, D1 resource, credential, callback secret, subscription, plugin, or background worker has been created by this preparation. Schema and adapter implementation should follow the independent review's state-model findings first.
-
-Validation limits: the current TypeScript check covers declaration contracts only; the two-connection claim test is sequential. Manual repeated `once()` calls refresh leases for polling, but no automatic heartbeat runs during a blocked long create/get request. The slow-admission regression proves stale completion is rejected and the slot remains blocked, not continuous lease renewal. Real worker enablement must remain denied until automatic renewal, stop reconciliation and gate release, simultaneous contention, and receiver crash/ack-loss behavior are tested.
-
-## Real API admission prerequisites
-
-Treat the desktop UI backend and standard gateway API as distinct interfaces. The desktop backend's address can change between launches and may not expose Runs/capabilities; never infer a Runs endpoint from an old desktop port. Configure and verify a standard loopback API endpoint only after the isolated-profile approval. The standard API requires its own API_SERVER_KEY even on loopback; do not extract/reuse desktop internal authentication.
-
-Before any real admission, inspect authenticated capabilities and require durable idempotency support (a memory-only fallback is insufficient for crash recovery). Require the isolated server-side `platform_toolsets.api_server` policy and independently prove effective runtime tool definitions are empty; request `tools: []` does not establish that policy. Prove personal memory, history, sessions and existing jobs are isolated as well. No runner configuration, API key, or other credential is created until action-time approval; after approval, generate/store secrets locally without exposing their values to the model, chat, logs or public source.
+No events capability is advertised. No live subscription or callback secret is created, and nothing in the tests sends to a real callback.
