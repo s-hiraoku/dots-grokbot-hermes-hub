@@ -48,3 +48,9 @@ Needed protocol and security work:
 No Site, D1 resource, credential, callback secret, subscription, plugin, or background worker has been created by this preparation. Schema and adapter implementation should follow the independent review's state-model findings first.
 
 Validation limits: the current TypeScript check covers declaration contracts only; the two-connection claim test is sequential. Manual repeated `once()` calls refresh leases for polling, but no automatic heartbeat runs during a blocked long create/get request. The slow-admission regression proves stale completion is rejected and the slot remains blocked, not continuous lease renewal. Real worker enablement must remain denied until automatic renewal, stop reconciliation and gate release, simultaneous contention, and receiver crash/ack-loss behavior are tested.
+
+## Real API admission prerequisites
+
+Treat the desktop UI backend and standard gateway API as distinct interfaces. The desktop backend's address can change between launches and may not expose Runs/capabilities; never infer a Runs endpoint from an old desktop port. Configure and verify a standard loopback API endpoint only after the isolated-profile approval. The standard API requires its own API_SERVER_KEY even on loopback; do not extract/reuse desktop internal authentication.
+
+Before any real admission, inspect authenticated capabilities and require durable idempotency support (a memory-only fallback is insufficient for crash recovery). Require the isolated server-side `platform_toolsets.api_server` policy and independently prove effective runtime tool definitions are empty; request `tools: []` does not establish that policy. Prove personal memory, history, sessions and existing jobs are isolated as well. No runner configuration, API key, or other credential is created until action-time approval; after approval, generate/store secrets locally without exposing their values to the model, chat, logs or public source.
