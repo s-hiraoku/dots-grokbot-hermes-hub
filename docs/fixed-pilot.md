@@ -18,6 +18,8 @@ The policy review must cover **all Python import roots, interpreter/standard lib
 
 Evidence expires within 30 seconds. API policy corroborates the independent approved-code/process gate; it does not replace it. `ProcessProbe` injection is only a trusted testing seam. Production must use the built-in observer, not a fabricated observation. This source implementation and its dummy policies have not been run against a real profile, credential file, DB, process or model.
 
+A subsequent read-only metadata check confirmed that the existing installed runtime does **not** satisfy this inspector: its checkout is owner-writable, its venv interpreter is a symlink, and its dependency tree exceeds the current 512 MiB per-tree limit. Its editable import hook points back to the mutable checkout. The dedicated API was stopped. A complete approved runtime snapshot and bounded compatibility review are still required before a live Hub roundtrip; copying the venv alone is insufficient. Existing Desktop files, authentication and configuration have not been changed.
+
 ## Next real test: separate approval
 
 1. Approve reviewing/building the complete immutable code/runtime snapshot and sanitized manual launch contract, then populate a local-only pinned policy from nonsecret reviewed files and credential/store metadata. Do not issue or rotate authentication automatically.
@@ -25,4 +27,4 @@ Evidence expires within 30 seconds. API policy corroborates the independent appr
 3. Approve one fixed Hub task/new independent model run with the exact pilot payload. Keep concurrency one, journal original replay contract/deadline, poll only its ID, retrieve the result explicitly with authenticated MCP get, and manually stop/confirm shutdown.
 4. Approve a concrete local Hub requester/worker authentication mapping or a separately verified private hosted boundary. Production Node/Worker entry points still default to 401; a fixture verifier is not a production identity scheme.
 
-No new authentication, actual API start, model call, personal input, automatic retry after expiry, cloud deployment or merge is included in this PR. Events/Dots automatic continuation remains separate.
+No new authentication, actual API start, model call, personal input, automatic retry after expiry or cloud deployment is included in this PR. Events/Dots automatic continuation remains separate.
