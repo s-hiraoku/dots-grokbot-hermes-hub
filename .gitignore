@@ -7,3 +7,7 @@ logs/
 *.sqlite*
 *.log
 .DS_Store
+
+dist/
+.sites-runtime/
+.wrangler/

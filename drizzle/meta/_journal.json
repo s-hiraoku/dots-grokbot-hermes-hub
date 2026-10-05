@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1791163645451,
+      "tag": "0000_acoustic_magma",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1791163645659,
+      "tag": "0001_audit_outbox",
+      "breakpoints": true
+    }
+  ]
+}

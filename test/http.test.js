@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { Hub, RESPONSE } from "../src/hub.js";
-import { handler } from "../src/mcp.js";
-import { Adapter, MockRuns } from "../src/adapter.js";
-import { MCPHubClient } from "../src/client.js";
+import { Hub, RESPONSE } from "./fixtures.js";
+import { handler } from "../src/mcp.ts";
+import { Adapter, MockRuns } from "../src/adapter.ts";
+import { MCPHubClient } from "../src/client.ts";
 test("official MCP client HTTP initialization/discovery and fixed roundtrip", async () => {
   const hub = new Hub();
   const owner = {
