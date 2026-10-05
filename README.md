@@ -12,4 +12,6 @@ Tests exercise a fixed requester → HTTP MCP → async task service → outboun
 
 Only `connectivity_check` is accepted, with an idempotency key and no user text, agent name, shell command, URL or personal data. The fixed successful output is `Agent Hub connectivity check completed.` Hermes concurrency is one, including unresolved cancelled runs. Tests never contact a real agent or callback.
 
+The typed Hermes standard Runs driver is verified against a temporary mock HTTP API, including lost-admission recovery. It remains disabled for real instances until trusted execution-isolation evidence and runtime authentication are approved. See [first-connection contract](docs/hermes-connection.md).
+
 See [architecture and approval gates](docs/architecture.md) and [hosting and Events status](docs/migration-plan.md). This is locally validated code, not a deployed three-agent connection.

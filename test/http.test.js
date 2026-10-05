@@ -5,10 +5,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Hub, RESPONSE } from "./fixtures.js";
 import { handler } from "../src/mcp.ts";
-import { Adapter, MockRuns } from "../src/adapter.ts";
+import { Adapter } from "../src/adapter.ts";
+import { HermesRuns } from "../src/hermes-runs.ts";
+import { hermesFixture } from "./hermes-fixture.js";
 import { MCPHubClient } from "../src/client.ts";
 test("official MCP client HTTP initialization/discovery and fixed roundtrip", async () => {
   const hub = new Hub();
+  const hermes = await hermesFixture();
   const owner = {
     subject: "dummy-owner",
     operations: ["submit", "get", "cancel"],
@@ -91,7 +94,7 @@ test("official MCP client HTTP initialization/discovery and fixed roundtrip", as
         this.entry = null;
       },
     };
-    const runs = new MockRuns();
+    const runs = await HermesRuns.connect(hermes.options);
     const remote = new MCPHubClient(b);
     const heartbeats = [];
     const heartbeat = remote.heartbeat.bind(remote);
@@ -99,16 +102,16 @@ test("official MCP client HTTP initialization/discovery and fixed roundtrip", as
       heartbeats.push(structuredClone(args));
       return heartbeat(principal, args);
     };
-    await new Adapter(remote, worker, runs, journal).once();
+    await new Adapter(remote, worker, runs, journal).run();
     assert.equal(
       (await call(a, "get", { id: adapterTask.id })).state,
       "succeeded",
     );
     assert.equal(journal.load(), null);
-    assert.equal(runs.calls, 1);
-    assert.deepEqual(heartbeats, [
+    assert.equal(hermes.state.calls, 1);
+    assert.deepEqual(heartbeats.slice(0, 2), [
       { id: adapterTask.id, fence: 1 },
-      { id: adapterTask.id, fence: 1, run_id: "mock-1" },
+      { id: adapterTask.id, fence: 1, run_id: "run_fixture1" },
     ]);
 
     assert.equal(
@@ -128,6 +131,7 @@ test("official MCP client HTTP initialization/discovery and fixed roundtrip", as
     await a.close();
     await b.close();
     await new Promise((r) => server.close(r));
+    await hermes.close();
     hub.close();
   }
 });
