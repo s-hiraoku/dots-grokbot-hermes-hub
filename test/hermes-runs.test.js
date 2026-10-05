@@ -11,6 +11,7 @@ import { hermesFixture } from "./hermes-fixture.js";
 const endpoint = "http://127.0.0.1:10001/";
 const evidence = () => ({
   endpoint,
+  scopeId: "fixture-isolated-scope",
   sourceCommit: HERMES_COMMIT,
   expiresAt: Date.now() + 60000,
   dedicatedProfile: true,
@@ -43,6 +44,7 @@ const input = {
 function options(change = {}) {
   return {
     endpoint,
+    scopeId: "fixture-isolated-scope",
     apiKey: "fixture-hermes",
     inspectIsolation: async () => evidence(),
     fetch: async (url, init) => {
@@ -311,4 +313,56 @@ test("Hermes transport refuses omitted/non-loopback endpoints and missing keys w
       HermesRuns.connect(options(change)),
       /configuration_rejected/,
     );
+});
+test("changed idempotency retention rejects replay before POST", async () => {
+  let changed = false,
+    admissions = 0;
+  const base = options();
+  const runs = await HermesRuns.connect(
+    options({
+      fetch: async (url, init) => {
+        if (init.method === "POST") admissions++;
+        if (
+          changed &&
+          init.headers.Authorization &&
+          url.pathname === "/v1/capabilities"
+        ) {
+          const c = cap();
+          c.features.runs_idempotency.retention_seconds = 60;
+          return Response.json(c);
+        }
+        return base.fetch(url, init);
+      },
+    }),
+  );
+  changed = true;
+  await assert.rejects(runs.create(input), /retention_changed/);
+  assert.equal(admissions, 0);
+});
+test("persisted admission scope mismatch rejects recovery before another claim/create", async () => {
+  const { Hub, worker, submit, journal } = await import("./fixtures.js");
+  const { Adapter } = await import("../src/adapter.ts");
+  const h = new Hub();
+  const receipt = journal();
+  const runs = await HermesRuns.connect(options());
+  try {
+    await submit(h);
+    const task = await h.claim(worker);
+    receipt.save({
+      id: task.id,
+      fence: task.fence,
+      key: `hub-${task.id}`,
+      run_id: null,
+      admitted_at: Date.now(),
+      runner_scope: "different-endpoint-or-credential-scope",
+    });
+    await assert.rejects(
+      new Adapter(h, worker, runs, receipt).once(),
+      /runner_scope_requires_reconciliation/,
+    );
+    assert.equal((await h.get(worker, task)).execution_open, 1);
+    assert.ok(receipt.load());
+  } finally {
+    h.close();
+  }
 });

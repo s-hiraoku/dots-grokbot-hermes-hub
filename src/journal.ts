@@ -10,6 +10,7 @@ const receiptSchema = z
       .string()
       .regex(/^[a-zA-Z0-9_-]{1,100}$/)
       .nullable(),
+    runner_scope: z.string().max(200).optional(),
     admitted_at: z.number().finite().nonnegative(),
   })
   .strict();

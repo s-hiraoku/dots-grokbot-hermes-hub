@@ -68,9 +68,11 @@ export async function hermesFixture() {
     state,
     options: {
       endpoint,
+      scopeId: "fixture-isolated-scope",
       apiKey: "fixture-hermes",
       inspectIsolation: async () => ({
         endpoint,
+        scopeId: "fixture-isolated-scope",
         sourceCommit: HERMES_COMMIT,
         expiresAt: Date.now() + 60000,
         dedicatedProfile: true,

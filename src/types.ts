@@ -33,6 +33,7 @@ export interface Receipt extends Lease {
   key: string;
   run_id: string | null;
   admitted_at: number;
+  runner_scope?: string;
 }
 export interface Run {
   id: string;
@@ -40,6 +41,7 @@ export interface Run {
   text?: string;
 }
 export interface Runs {
+  readonly boundaryId?: string;
   readonly toolIsolationVerified: boolean;
   readonly durableIdempotency: boolean;
   readonly retentionMs: number;

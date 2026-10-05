@@ -88,6 +88,12 @@ export class Adapter {
       throw new Error("runner_boundary_unverified");
     const now = this.options.now ?? (() => Date.now());
     let entry = this.journal.load();
+    if (
+      entry &&
+      this.runs.boundaryId &&
+      entry.runner_scope !== this.runs.boundaryId
+    )
+      throw new Error("runner_scope_requires_reconciliation");
     if (!entry) {
       const task = await this.hub.claim(this.principal, {});
       if (!task) return null;
@@ -97,6 +103,7 @@ export class Adapter {
         key: `hub-${task.id}`,
         run_id: task.run_id,
         admitted_at: now(),
+        ...(this.runs.boundaryId ? { runner_scope: this.runs.boundaryId } : {}),
       };
       this.journal.save(entry);
     }

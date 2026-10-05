@@ -7,6 +7,7 @@ const runId = z.string().regex(/^run_[a-zA-Z0-9_-]{1,120}$/);
 const evidenceSchema = z
   .object({
     endpoint: z.string(),
+    scopeId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
     sourceCommit: z.literal(HERMES_COMMIT),
     expiresAt: z.number().int(),
     dedicatedProfile: z.literal(true),
@@ -22,6 +23,7 @@ export type IsolationEvidence = z.infer<typeof evidenceSchema>;
 export interface HermesOptions {
   // Supplied by a trusted operator boundary, never a task or MCP argument.
   endpoint: string;
+  scopeId: string;
   apiKey: string;
   inspectIsolation: () => Promise<IsolationEvidence | null>;
   fetch?: typeof fetch;
@@ -60,6 +62,7 @@ export class HermesRuns implements Runs {
       this.#endpoint.hash ||
       this.#endpoint.username ||
       this.#endpoint.password ||
+      !/^[a-zA-Z0-9_-]{1,80}$/.test(options.scopeId ?? "") ||
       !options.apiKey ||
       /[\r\n]/.test(options.apiKey) ||
       (options.timeoutMs ?? 5000) > 10000 ||
@@ -71,6 +74,9 @@ export class HermesRuns implements Runs {
     const runs = new HermesRuns(options);
     await runs.verify();
     return runs;
+  }
+  get boundaryId() {
+    return `${this.#endpoint.href}|${this.#options.scopeId}`;
   }
   get toolIsolationVerified() {
     return this.#verifiedUntil > this.now();
@@ -158,6 +164,7 @@ export class HermesRuns implements Runs {
     if (
       !evidence.success ||
       evidence.data.endpoint !== this.#endpoint.href ||
+      evidence.data.scopeId !== this.#options.scopeId ||
       evidence.data.expiresAt <= now ||
       evidence.data.expiresAt > now + 300000
     )
@@ -193,8 +200,11 @@ export class HermesRuns implements Runs {
       throw new Error("hermes_tools_enabled");
     if (this.now() >= evidence.data.expiresAt)
       throw new Error("hermes_isolation_expired");
-    this.#retention =
+    const retention =
       cap.data.features.runs_idempotency.retention_seconds * 1000;
+    if (this.#retention && retention !== this.#retention)
+      throw new Error("hermes_retention_changed");
+    this.#retention = retention;
     this.#verifiedUntil = Math.min(evidence.data.expiresAt, this.now() + 30000);
   }
   async create(input: {
