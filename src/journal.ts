@@ -10,6 +10,14 @@ const receiptSchema = z
       .string()
       .regex(/^[a-zA-Z0-9_-]{1,100}$/)
       .nullable(),
+    replay: z
+      .object({
+        deadline: z.number().finite().nonnegative(),
+        retentionMs: z.number().finite().positive(),
+        contract: z.string().min(1).max(100),
+      })
+      .strict()
+      .optional(),
     runner_scope: z.string().max(200).optional(),
     admitted_at: z.number().finite().nonnegative(),
   })

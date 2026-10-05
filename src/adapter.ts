@@ -97,12 +97,18 @@ export class Adapter {
     if (!entry) {
       const task = await this.hub.claim(this.principal, {});
       if (!task) return null;
+      const admitted = now();
       entry = {
         id: task.id,
         fence: task.fence,
         key: `hub-${task.id}`,
         run_id: task.run_id,
-        admitted_at: now(),
+        admitted_at: admitted,
+        replay: {
+          deadline: admitted + this.runs.retentionMs,
+          retentionMs: this.runs.retentionMs,
+          contract: this.runs.admissionContract ?? "fixed-connectivity-v1",
+        },
         ...(this.runs.boundaryId ? { runner_scope: this.runs.boundaryId } : {}),
       };
       this.journal.save(entry);
@@ -128,8 +134,18 @@ export class Adapter {
     }
     if (task.state !== "running" || task.fence !== receipt.fence)
       throw new Error("reconciliation_requires_approval");
-    if (!receipt.run_id && now() - receipt.admitted_at >= this.runs.retentionMs)
-      throw new Error("idempotency_horizon_expired");
+    if (!receipt.run_id) {
+      if (
+        this.runs.admissionContract &&
+        (!receipt.replay ||
+          receipt.replay.contract !== this.runs.admissionContract ||
+          receipt.replay.retentionMs !== this.runs.retentionMs)
+      )
+        throw new Error("replay_contract_requires_reconciliation");
+      const horizon =
+        receipt.replay?.deadline ?? receipt.admitted_at + this.runs.retentionMs;
+      if (now() >= horizon) throw new Error("idempotency_horizon_expired");
+    }
     const interval = this.options.heartbeatMs ?? 10000;
     if (interval <= 0 || !task.lease || interval >= task.lease - task.at)
       throw new Error("unsafe_heartbeat_interval");
@@ -179,6 +195,7 @@ export class Adapter {
             idempotencyKey: receipt.key,
             prompt: RESPONSE,
             tools: [],
+            replay: receipt.replay,
             signal: controller.signal,
           });
       const run = await Promise.race([work, leaseFailure, stopFailure]);

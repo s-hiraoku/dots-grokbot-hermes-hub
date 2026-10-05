@@ -38,6 +38,11 @@ const cap = () => ({
 });
 const input = {
   idempotencyKey: "hub-00000000-0000-4000-8000-000000000001",
+  replay: {
+    deadline: Date.now() + 86400000,
+    retentionMs: 86400000,
+    contract: "hermes-fixed-connectivity-v1",
+  },
   prompt: RESPONSE,
   tools: [],
 };
@@ -366,3 +371,97 @@ test("persisted admission scope mismatch rejects recovery before another claim/c
     h.close();
   }
 });
+for (const mode of [
+  "longer-retention-after-reconnect",
+  "expiry-during-preflight",
+])
+  test(`persistent unknown admission never replays after original deadline: ${mode}`, async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { Hub, worker, submit } = await import("./fixtures.js");
+    const { Journal } = await import("../src/journal.ts");
+    const { Adapter } = await import("../src/adapter.ts");
+    const dir = mkdtempSync(join(tmpdir(), "hub-replay-deadline-"));
+    let now = Date.now();
+    let retention = 1,
+      cross = false,
+      calls = 0,
+      lose = true;
+    const admitted = new Map();
+    const h = new Hub(join(dir, "hub.db"), () => now);
+    let receipt = new Journal(join(dir, "receipt.db"));
+    const config = options({
+      now: () => now,
+      inspectIsolation: async () => ({ ...evidence(), expiresAt: now + 60000 }),
+      fetch: async (url, init) => {
+        if (!init.headers.Authorization)
+          return new Response(null, { status: 401 });
+        if (url.pathname === "/v1/capabilities") {
+          const c = cap();
+          c.features.runs_idempotency.retention_seconds = retention;
+          return Response.json(c);
+        }
+        if (url.pathname === "/v1/toolsets") {
+          if (cross) {
+            now += 1001;
+            cross = false;
+          }
+          return Response.json([]);
+        }
+        if (init.method === "POST") {
+          const key = init.headers["Idempotency-Key"];
+          if (!admitted.has(key) || admitted.get(key).expiry <= now) {
+            calls++;
+            admitted.set(key, {
+              id: `run_fixture${calls}`,
+              expiry: now + 1000,
+            });
+          }
+          if (lose) {
+            lose = false;
+            throw new Error("fixture_ack_lost");
+          }
+          return Response.json(
+            { run_id: admitted.get(key).id, status: "started" },
+            { status: 202 },
+          );
+        }
+        throw new Error("unexpected_poll");
+      },
+    });
+    try {
+      await submit(h);
+      const first = await HermesRuns.connect(config);
+      await assert.rejects(
+        new Adapter(h, worker, first, receipt, { now: () => now }).once(),
+        /fixture_ack_lost/,
+      );
+      const saved = receipt.load();
+      assert.equal(calls, 1);
+      assert.equal(saved.replay.retentionMs, 1000);
+      assert.equal(saved.replay.deadline, saved.admitted_at + 1000);
+      receipt.close();
+      receipt = new Journal(join(dir, "receipt.db"));
+      if (mode === "longer-retention-after-reconnect") {
+        now += 1001;
+        retention = 5;
+      }
+      const reconnected = await HermesRuns.connect(config);
+      if (mode === "expiry-during-preflight") cross = true;
+      await assert.rejects(
+        new Adapter(h, worker, reconnected, receipt, { now: () => now }).once(),
+        /replay_contract_requires_reconciliation|idempotency_horizon_expired/,
+      );
+      assert.equal(calls, 1);
+      assert.equal(receipt.load().run_id, null);
+      assert.deepEqual(receipt.load().replay, saved.replay);
+      const persisted = await h.get(worker, saved);
+      assert.equal(persisted.state, "running");
+      assert.equal(persisted.execution_open, 1);
+    } finally {
+      receipt.close();
+      h.close();
+      rmSync(dir, { recursive: true });
+    }
+  });

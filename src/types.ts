@@ -29,11 +29,17 @@ export interface Task extends Lease {
   execution_open: number;
   at: number;
 }
+export interface ReplayContract {
+  deadline: number;
+  retentionMs: number;
+  contract: string;
+}
 export interface Receipt extends Lease {
   key: string;
   run_id: string | null;
   admitted_at: number;
   runner_scope?: string;
+  replay?: ReplayContract;
 }
 export interface Run {
   id: string;
@@ -42,6 +48,7 @@ export interface Run {
 }
 export interface Runs {
   readonly boundaryId?: string;
+  readonly admissionContract?: string;
   readonly toolIsolationVerified: boolean;
   readonly durableIdempotency: boolean;
   readonly retentionMs: number;
@@ -50,6 +57,7 @@ export interface Runs {
     prompt: string;
     tools: never[];
     signal?: AbortSignal;
+    replay?: ReplayContract;
   }): Promise<Run>;
   get(id: string, signal?: AbortSignal): Promise<Run>;
 }

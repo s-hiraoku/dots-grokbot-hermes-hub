@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RESPONSE, type Run, type Runs } from "./types.ts";
+import { RESPONSE, type Run, type Runs, type ReplayContract } from "./types.ts";
 export const HERMES_MODEL = "gpt-6.1-sol";
 export const HERMES_PROVIDER = "openai-codex";
 export const HERMES_COMMIT = "f97608f178d1ffeca59860195ab7da295f7c8e5f";
@@ -75,6 +75,7 @@ export class HermesRuns implements Runs {
     await runs.verify();
     return runs;
   }
+  readonly admissionContract = "hermes-fixed-connectivity-v1";
   get boundaryId() {
     return `${this.#endpoint.href}|${this.#options.scopeId}`;
   }
@@ -212,17 +213,35 @@ export class HermesRuns implements Runs {
     prompt: string;
     tools: never[];
     signal?: AbortSignal;
+    replay?: ReplayContract;
   }): Promise<Run> {
     if (
       input.prompt !== RESPONSE ||
       input.tools.length ||
       Object.keys(input).some(
-        (k) => !["idempotencyKey", "prompt", "tools", "signal"].includes(k),
+        (k) =>
+          !["idempotencyKey", "prompt", "tools", "signal", "replay"].includes(
+            k,
+          ),
       ) ||
       !/^hub-[0-9a-f-]{36}$/.test(input.idempotencyKey)
     )
       throw new Error("hermes_input_rejected");
+    const replay = input.replay ? { ...input.replay } : undefined;
+    if (
+      !replay ||
+      replay.contract !== this.admissionContract ||
+      !Number.isFinite(replay.deadline) ||
+      !Number.isFinite(replay.retentionMs) ||
+      replay.retentionMs <= 0
+    )
+      throw new Error("hermes_replay_contract_unverified");
     await this.verify(input.signal);
+    // Recheck the original persisted contract after all asynchronous preflight, immediately before POST.
+    if (replay.retentionMs !== this.#retention)
+      throw new Error("hermes_replay_contract_changed");
+    if (this.now() >= replay.deadline)
+      throw new Error("idempotency_horizon_expired");
     const accepted = z
       .object({
         run_id: runId,
