@@ -37,3 +37,11 @@ Before advertising formal events support, implement and test:
 - Receiver crash/ack-loss integration, delivery-state restart and real signatures through an approved callback/plugin connection.
 
 No events capability is advertised. No live subscription or callback secret is created, and nothing in the tests sends to a real callback.
+
+## Review corrections and remaining runtime decisions
+
+Lease validity is evaluated inside the updating SQL statement, using SQLite's driver-owned `hub_now()` function or D1's database `unixepoch('subsec')` clock. A timestamp captured before an asynchronous batch cannot authorize a late heartbeat/completion. Tests invalidate leases between operation entry and SQL application on both drivers. SQLite migration existence is rechecked after acquiring the write lock; empty database and pending migration startup are tested with four independent constructors. Local stop during initial/final renewal preserves the receipt and prevents subsequent admission/terminal commit. Permanent callback HTTP status is classified at header receipt, without reading a potentially oversized body.
+
+The current pinned Node HTTPS connector cannot be copied into Workers unchanged. [Workers HTTPS compatibility](https://developers.cloudflare.com/workers/runtime-apis/nodejs/https/) implements HTTPS over fetch and does not provide the same connection/TLS options. [Workers DNS compatibility](https://developers.cloudflare.com/workers/runtime-apis/nodejs/dns/) does not implement `lookup`. Choose an approved fixed Node egress relay, or separately prove a Workers TLS connection implementation that pins a validated address while verifying the original hostname. Neither choice is implemented or authorized here; an ordinary fetch preceded by DNS validation would not establish the required connection-time guarantee.
+
+The registry also has official split MCP SDK packages with modern discovery support. This branch still uses the existing monolithic SDK and does not claim formal MCP Events discovery support. Migrate and test the SDK contract before advertising Events capabilities. No unused replacement SDK dependencies are committed.

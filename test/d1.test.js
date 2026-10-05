@@ -10,7 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Adapter, MockRuns } from "../src/adapter.ts";
 import { MCPHubClient } from "../src/client.ts";
-import { owner, worker, submit, journal } from "./fixtures.js";
+import { owner, worker, submit, journal, finish } from "./fixtures.js";
 import { storeSuite } from "./store-suite.js";
 const options = (path) =>
   convertV4MiniflareOptions({
@@ -48,6 +48,35 @@ test("local Worker D1 contract, concurrent calls and HTTP adapter roundtrip", as
     await migrate(db);
     const h = new D1Hub(db);
     await storeSuite(t, h);
+    for (const operation of ["heartbeat", "complete"])
+      await t.test(
+        `D1 ${operation} rejects expiry during driver delay`,
+        async () => {
+          await h.driver.batch([{ sql: "DELETE FROM tasks" }]);
+          await submit(h, `delay-${operation}`);
+          const task = await h.claim(worker);
+          const original = h.driver.batch.bind(h.driver);
+          h.driver.batch = async (statements) => {
+            await original([
+              {
+                sql: `UPDATE tasks SET lease=${h.driver.nowSQL}-1 WHERE id=?`,
+                params: [task.id],
+              },
+            ]);
+            return original(statements);
+          };
+          try {
+            await assert.rejects(
+              operation === "heartbeat"
+                ? h.heartbeat(worker, task)
+                : finish(h, task),
+            );
+          } finally {
+            h.driver.batch = original;
+          }
+          assert.equal((await h.get(worker, task)).state, "running");
+        },
+      );
     await h.driver.batch([{ sql: "DELETE FROM tasks" }]);
     const task = await submit(h, "worker-http");
     const client = new Client({ name: "fixture-worker", version: "1" });
