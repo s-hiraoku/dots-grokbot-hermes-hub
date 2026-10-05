@@ -6,10 +6,24 @@ export class Hub {
     this.db = new DatabaseSync(path);
     this.now = now;
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
-      CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, owner TEXT NOT NULL, destination TEXT NOT NULL, request_key TEXT NOT NULL, state TEXT NOT NULL, fence INTEGER NOT NULL DEFAULT 0, lease INTEGER, run_id TEXT, result TEXT, UNIQUE(owner, request_key));
+      CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, owner TEXT NOT NULL, destination TEXT NOT NULL, request_key TEXT NOT NULL, state TEXT NOT NULL, execution_open INTEGER NOT NULL DEFAULT 0, fence INTEGER NOT NULL DEFAULT 0, lease INTEGER, run_id TEXT, result TEXT, UNIQUE(owner, request_key));
       CREATE TABLE IF NOT EXISTS audit(seq INTEGER PRIMARY KEY, task TEXT, actor TEXT, state TEXT, at INTEGER);
       CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY, task TEXT, owner TEXT, event TEXT, delivered INTEGER NOT NULL DEFAULT 0);
     `);
+    // Preserve safety when opening a phase-one database from before execution gating.
+    if (
+      !this.db
+        .prepare("PRAGMA table_info(tasks)")
+        .all()
+        .some((c) => c.name === "execution_open")
+    ) {
+      this.db.exec(
+        "ALTER TABLE tasks ADD COLUMN execution_open INTEGER NOT NULL DEFAULT 0",
+      );
+      this.db.exec(
+        "UPDATE tasks SET execution_open=1 WHERE state IN ('running','waiting_approval') OR (state='cancelled' AND fence>1)",
+      );
+    }
   }
   tx(fn) {
     this.db.exec("BEGIN IMMEDIATE");
@@ -92,7 +106,7 @@ export class Hub {
       if (
         this.db
           .prepare(
-            "SELECT id FROM tasks WHERE destination=? AND state IN ('running','waiting_approval')",
+            "SELECT id FROM tasks WHERE destination=? AND execution_open=1",
           )
           .get(p.worker)
       )
@@ -105,7 +119,7 @@ export class Hub {
       if (!t) return null;
       this.db
         .prepare(
-          "UPDATE tasks SET state='running',fence=fence+1,lease=? WHERE id=?",
+          "UPDATE tasks SET state='running',execution_open=1,fence=fence+1,lease=? WHERE id=?",
         )
         .run(this.now() + 30000, t.id);
       return this.record(this.raw(t.id), p);
@@ -157,7 +171,9 @@ export class Hub {
       )
         throw new Error("invalid_result");
       this.db
-        .prepare("UPDATE tasks SET state=?,result=?,lease=NULL WHERE id=?")
+        .prepare(
+          "UPDATE tasks SET state=?,result=?,lease=NULL,execution_open=0 WHERE id=?",
+        )
         .run(a.state, a.result, t.id);
       return this.record(this.raw(t.id), p);
     });

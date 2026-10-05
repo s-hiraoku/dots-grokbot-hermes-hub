@@ -185,3 +185,139 @@ test("outbox and run journal survive actual database restart", async () => {
   h2.close();
   rmSync(dir, { recursive: true });
 });
+
+test("cancelled active work keeps next queued task blocked", () => {
+  const h = new Hub();
+  const first = submit(h);
+  h.submit(owner, { task_type: "connectivity_check", request_key: "second" });
+  const claimed = h.claim(worker);
+  h.cancel(owner, { id: first.id });
+  assert.equal(h.get(owner, first).execution_open, 1);
+  assert.equal(h.claim(worker), null);
+  assert.throws(() =>
+    h.complete(worker, { ...claimed, state: "succeeded", result: RESPONSE }),
+  );
+  h.close();
+});
+
+test("queued cancellation does not reserve an execution slot", () => {
+  const h = new Hub();
+  const first = submit(h);
+  h.cancel(owner, first);
+  const next = h.submit(owner, {
+    task_type: "connectivity_check",
+    request_key: "next",
+  });
+  assert.equal(h.claim(worker).id, next.id);
+  h.close();
+});
+
+test("slow run admission expires safely and never releases the slot", async () => {
+  let now = 0;
+  const h = new Hub(":memory:", () => now);
+  const task = submit(h);
+  const runs = new MockRuns();
+  const create = runs.create.bind(runs);
+  runs.create = async (a) => {
+    const run = await create(a);
+    now += 30001;
+    return run;
+  };
+  await assert.rejects(
+    new Adapter(h, worker, runs, journal()).once(),
+    /stale_lease/,
+  );
+  assert.equal(h.claim(worker), null);
+  assert.equal(h.get(owner, task).state, "waiting_approval");
+  assert.equal(runs.calls, 1);
+  h.close();
+});
+
+test("persistent restart reconciles a known active run by ID", async () => {
+  const { Journal } = await import("../src/journal.js");
+  const dir = mkdtempSync(join(tmpdir(), "hub-active-"));
+  const hp = join(dir, "hub.db"),
+    jp = join(dir, "journal.db");
+  let h = new Hub(hp),
+    j = new Journal(jp);
+  const task = submit(h);
+  let creates = 0,
+    reads = 0;
+  const runs = {
+    toolIsolationVerified: true,
+    async create() {
+      creates++;
+      return { id: "known-1", state: "running" };
+    },
+    async get(id) {
+      reads++;
+      assert.equal(id, "known-1");
+      return { id, state: "succeeded", text: RESPONSE };
+    },
+  };
+  await new Adapter(h, worker, runs, j).once();
+  assert.equal(h.get(owner, task).state, "running");
+  j.close();
+  h.close();
+  h = new Hub(hp);
+  j = new Journal(jp);
+  await new Adapter(h, worker, runs, j).once();
+  assert.equal(creates, 1);
+  assert.equal(reads, 1);
+  assert.equal(h.get(owner, task).state, "succeeded");
+  j.close();
+  h.close();
+  rmSync(dir, { recursive: true });
+});
+
+test("persistent restart reconciles lost admission with the original key", async () => {
+  const { Journal } = await import("../src/journal.js");
+  const dir = mkdtempSync(join(tmpdir(), "hub-unknown-"));
+  const hp = join(dir, "hub.db"),
+    jp = join(dir, "journal.db");
+  let h = new Hub(hp),
+    j = new Journal(jp);
+  const task = submit(h),
+    runs = new MockRuns();
+  const create = runs.create.bind(runs);
+  let first = true;
+  runs.create = async (a) => {
+    const r = await create(a);
+    if (first) {
+      first = false;
+      throw new Error("lost acknowledgement");
+    }
+    return r;
+  };
+  await assert.rejects(new Adapter(h, worker, runs, j).once());
+  assert.equal(j.load().run_id, null);
+  j.close();
+  h.close();
+  h = new Hub(hp);
+  j = new Journal(jp);
+  await new Adapter(h, worker, runs, j).once();
+  assert.equal(runs.calls, 1);
+  assert.equal(h.get(owner, task).state, "succeeded");
+  j.close();
+  h.close();
+  rmSync(dir, { recursive: true });
+});
+
+test("legacy database migration retains the cancelled execution gate", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const dir = mkdtempSync(join(tmpdir(), "hub-legacy-")),
+    path = join(dir, "hub.db");
+  const h = new Hub(path),
+    task = submit(h);
+  h.claim(worker);
+  h.cancel(owner, task);
+  h.close();
+  const db = new DatabaseSync(path);
+  db.exec("ALTER TABLE tasks DROP COLUMN execution_open");
+  db.close();
+  const reopened = new Hub(path);
+  assert.equal(reopened.get(owner, task).execution_open, 1);
+  assert.equal(reopened.claim(worker), null);
+  reopened.close();
+  rmSync(dir, { recursive: true });
+});

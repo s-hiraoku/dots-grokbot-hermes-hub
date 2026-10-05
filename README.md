@@ -9,3 +9,5 @@ Requires Node 24. `npm ci && npm run check && npm run lint && npm run typecheck 
 Only `connectivity_check` is accepted, with an idempotency key and no user text, agent name, shell command, URL, or personal data. The fixed successful output is `Agent Hub connectivity check completed.` Concurrency is one for Hermes. No real agent is contacted by these tests.
 
 See [architecture and approval gates](docs/architecture.md). This is an implementation foundation, not a production connection or deployment.
+
+`typecheck` currently checks the public declaration contract only, not implementation JavaScript. The two-connection claim test is sequential; true simultaneous contention remains a validation gate. Long-running real execution, automatic heartbeat scheduling, remote stop confirmation, and approved gate release remain unimplemented.

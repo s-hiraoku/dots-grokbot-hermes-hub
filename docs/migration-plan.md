@@ -15,10 +15,10 @@ A generic `transaction(async callback)` shim is insufficient. The [D1 binding AP
 Proposed database constraints and execution rules:
 
 - Preserve unique `(owner,request_key)` and stable event IDs. Persist immutable task type/destination and a canonical request fingerprint before extending the allowlisted task types.
-- Add a unique partial index on destination for `running` and `waiting_approval`; this enforces the single unresolved execution slot in the database itself.
+- Add a unique partial index on destination for `execution_open=1`; this enforces the single unresolved execution slot, including cancelled work awaiting remote reconciliation, in the database itself.
 - Claim performs expiry quarantine, then one conditional `UPDATE ... RETURNING` of the oldest queued row only when no unresolved row exists. Fence increment and lease issuance belong to that update. Never return a successful claim from a preliminary SELECT.
 - Heartbeat and completion predicate on task ID, verified worker assignment, current fence, current state, and nonexpired lease. Derive time at the server. Result replay must be authorized against immutable assignment and its successful completion fence.
-- Cancel predicates on submitting principal, increments the fence, and records the transition. It must not release the execution slot for new admission while a remote run may still execute: a reviewed cancellation/reconciliation state model is needed before real workers.
+- Cancel predicates on submitting principal, increments the fence, and records the transition. The local implementation retains `execution_open=1` for claimed work after cancel, blocking new admission while the old run may still execute. Remote stop/reconciliation and an authorized release operation remain required before real workers.
 - Record audit and outbox from the actual changed rows in the same batch, with an operation correlation ID or a tested database trigger design. A zero-row stale update must produce neither a false audit transition nor a notification. Do not use connection-scoped `changes()` across independent requests.
 - Final read and response must be tied to the same operation; review D1 read-replication/session guarantees before allowing replica reads in authorization, claim, or completion.
 
@@ -46,3 +46,5 @@ Needed protocol and security work:
 6. Tests for forged identity, cross-owner subscription lookup, verification failure, duplicate subscribe, expiry/revocation, unsubscribe races, DNS/redirect rejection, signature checks, retry loss, and delivery restart.
 
 No Site, D1 resource, credential, callback secret, subscription, plugin, or background worker has been created by this preparation. Schema and adapter implementation should follow the independent review's state-model findings first.
+
+Validation limits: the current TypeScript check covers declaration contracts only; the two-connection claim test is sequential. Manual repeated `once()` calls refresh leases for polling, but no automatic heartbeat runs during a blocked long create/get request. The slow-admission regression proves stale completion is rejected and the slot remains blocked, not continuous lease renewal. Real worker enablement must remain denied until automatic renewal, stop reconciliation and gate release, simultaneous contention, and receiver crash/ack-loss behavior are tested.
