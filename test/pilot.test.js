@@ -112,11 +112,14 @@ for (const file of ["config.yaml", ".env", "idempotency.db"])
     const policy = await policyFixture("http://127.0.0.1:10001/");
     try {
       if (file === "idempotency.db") {
-        await fs.unlink(join(policy.policy.profileRoot, file));
         await fs.writeFile(
-          join(policy.policy.profileRoot, file),
+          join(policy.policy.profileRoot, `${file}.replacement`),
           "replacement",
           { mode: 0o600 },
+        );
+        await fs.rename(
+          join(policy.policy.profileRoot, `${file}.replacement`),
+          join(policy.policy.profileRoot, file),
         );
       } else
         await fs.writeFile(join(policy.policy.profileRoot, file), "changed", {
