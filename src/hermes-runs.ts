@@ -1,9 +1,18 @@
 import { z } from "zod";
-import { RESPONSE, type Run, type Runs, type ReplayContract } from "./types.ts";
+import {
+  RESPONSE,
+  RUN_ID_PATTERN,
+  type Run,
+  type Runs,
+  type ReplayContract,
+} from "./types.ts";
 export const HERMES_MODEL = "gpt-6.1-sol";
 export const HERMES_PROVIDER = "openai-codex";
 export const HERMES_COMMIT = "f97608f178d1ffeca59860195ab7da295f7c8e5f";
-const runId = z.string().regex(/^run_[a-zA-Z0-9_-]{1,120}$/);
+const runId = z
+  .string()
+  .regex(RUN_ID_PATTERN)
+  .regex(/^run_[a-zA-Z0-9_-]+$/);
 const evidenceSchema = z
   .object({
     endpoint: z.string(),

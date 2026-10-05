@@ -55,15 +55,15 @@ export class TaskService {
       Object.keys(a).some((k) => !["task_type", "request_key"].includes(k))
     )
       throw new Error("invalid_request");
+    const clock = this.driver.nowSQL;
     const r = await this.driver.batch([
       stmt(
-        "INSERT OR IGNORE INTO tasks(id,owner,destination,request_key,state,actor,at,mutation) VALUES(?,?,?,?,'queued',?,?,?)",
+        `INSERT OR IGNORE INTO tasks(id,owner,destination,request_key,state,actor,at,mutation) VALUES(?,?,?,?,'queued',?,${clock},?)`,
         crypto.randomUUID(),
         p.subject,
         p.destination,
         a.request_key,
         p.subject,
-        this.now(),
         crypto.randomUUID(),
       ),
       stmt(
@@ -157,11 +157,11 @@ export class TaskService {
   }
   async cancel(p: Principal, a: { id: string }) {
     this.principal(p, "cancel");
+    const clock = this.driver.nowSQL;
     const r = await this.driver.batch([
       stmt(
-        "UPDATE tasks SET state='cancelled',fence=fence+1,lease=NULL,actor=?,at=?,mutation=? WHERE id=? AND owner=? AND state NOT IN ('succeeded','failed','cancelled')",
+        `UPDATE tasks SET state='cancelled',fence=fence+1,lease=NULL,actor=?,at=${clock},mutation=? WHERE id=? AND owner=? AND state NOT IN ('succeeded','failed','cancelled')`,
         p.subject,
-        this.now(),
         crypto.randomUUID(),
         a.id,
         p.subject,

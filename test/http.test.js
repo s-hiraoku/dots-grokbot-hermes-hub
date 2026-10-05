@@ -69,7 +69,7 @@ test("official MCP client HTTP initialization/discovery and fixed roundtrip", as
     await call(b, "heartbeat", {
       id: t.id,
       fence: claimed.fence,
-      run_id: "mock-1",
+      run_id: `run_${"a".repeat(120)}`,
     });
     await call(b, "complete", {
       id: t.id,

@@ -1,3 +1,4 @@
+export const RUN_ID_PATTERN = /^[a-zA-Z0-9_-]{1,124}$/;
 export const RESPONSE = "Agent Hub connectivity check completed.";
 export type State =
   | "queued"

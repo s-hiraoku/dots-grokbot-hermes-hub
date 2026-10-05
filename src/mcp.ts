@@ -4,7 +4,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import type { TaskService } from "./store.ts";
-import type { Principal } from "./types.ts";
+import { RUN_ID_PATTERN, type Principal } from "./types.ts";
 const id = z.string().uuid(),
   fence = z.number().int().positive();
 export const schemas = {
@@ -21,10 +21,7 @@ export const schemas = {
     .object({
       id,
       fence,
-      run_id: z
-        .string()
-        .regex(/^[a-zA-Z0-9_-]{1,100}$/)
-        .optional(),
+      run_id: z.string().regex(RUN_ID_PATTERN).optional(),
     })
     .strict(),
   complete: z

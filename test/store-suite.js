@@ -29,6 +29,21 @@ export async function storeSuite(t, h) {
     },
   );
   await check(
+    "cancel requires explicit operation and ownership; submit routing is independent",
+    async () => {
+      const task = await submit(h);
+      await assert.rejects(h.cancel(worker, task));
+      await assert.rejects(
+        h.cancel({ ...owner, subject: "other-owner" }, task),
+      );
+      const cancelled = await h.cancel(
+        { subject: owner.subject, operations: ["cancel"] },
+        task,
+      );
+      assert.equal(cancelled.state, "cancelled");
+    },
+  );
+  await check(
     "simultaneous claim attempts yield exactly one winner",
     async () => {
       await submit(h);

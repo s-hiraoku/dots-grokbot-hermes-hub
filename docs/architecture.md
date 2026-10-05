@@ -6,7 +6,7 @@ Dots retains personal context, consultation, important-mail decisions, mark-read
 
 Both Node and Worker `POST /mcp` entry points use the pinned official MCP SDK. Strict schemas expose submit, claim, heartbeat, complete, get and cancel. No caller supplies a destination or trusted identity. Submit takes `{task_type:"connectivity_check",request_key}`; claim `{}`; get/cancel `{id}`; heartbeat `{id,fence,run_id?}`; complete `{id,fence,state,result}` with fixed success/failure results.
 
-A trusted verifier supplies `{subject,operations,destination?,worker?}`. Default verification returns no identity and HTTP 401. Header names, including Sites identity headers, are never automatically trusted. A future Sites integration must verify the hosting boundary and map authenticated users/services to distinct policy. No service credential may manufacture user identity or connected-app consent.
+A trusted verifier supplies `{subject,operations,destination?,worker?}`. Default verification returns no identity and HTTP 401. Header names, including Sites identity headers, are never automatically trusted. A future Sites integration must verify the hosting boundary and map authenticated users/services to distinct policy. No service credential may manufacture user identity or connected-app consent. Cancellation requires both a verifier-granted `cancel` operation and task ownership. `destination` chooses the route for new submissions; it does not grant cancellation authority. A principal granted only cancellation may stop its own task without also being granted new-submission routing. Worker-only or foreign-owner principals cannot cancel.
 
 ## One state database, two storage drivers
 

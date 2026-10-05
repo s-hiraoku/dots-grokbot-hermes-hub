@@ -158,3 +158,26 @@ for (const operation of ["heartbeat", "complete"])
       h.close();
     }
   });
+for (const operation of ["submit", "cancel"])
+  test(`${operation} audit uses SQL application clock`, async () => {
+    let now = 1000;
+    const h = new Hub(":memory:", () => now);
+    try {
+      const task = operation === "cancel" ? await submit(h) : null;
+      const batch = h.driver.batch.bind(h.driver);
+      h.driver.batch = async (statements) => {
+        now = 2000;
+        return batch(statements);
+      };
+      const result = task ? await h.cancel(owner, task) : await submit(h);
+      assert.equal(result.at, 2000);
+      assert.equal(
+        h.sqlite.db
+          .prepare("SELECT at FROM audit ORDER BY rowid DESC LIMIT 1")
+          .get().at,
+        2000,
+      );
+    } finally {
+      h.close();
+    }
+  });
