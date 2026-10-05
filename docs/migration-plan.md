@@ -4,7 +4,7 @@
 
 The local foundation proves the six task operations, strict fixed-payload schemas, server-supplied principal policy, persistent state, lease fencing, and mock-run/outbox recovery. Its tests do not establish production authentication, D1 consistency, effective Hermes tool restrictions, subscription security, or hosted HTTP compatibility. A separate review is checking the existing implementation; do not merge or deploy on the strength of this document.
 
-The current runtime cannot be copied directly to a Worker-style Site: `node:sqlite`, local filesystem journals, `node:http` request/response transport, and synchronous transaction callbacks are Node-specific. The MCP callback currently assumes a synchronous Hub result. The real outbound Hub client and real Hermes Runs client are also absent; the adapter consumes injected test interfaces.
+The current runtime cannot be copied directly to a Worker-style Site: `node:sqlite`, local filesystem journals, `node:http` request/response transport, and synchronous transaction callbacks are Node-specific. The MCP callback currently assumes a synchronous Hub result. The outbound Hub wrapper accepts an already connected, authenticated official MCP client; a production transport/bootstrap and real Hermes Runs client are absent. The adapter consumes an injected run-service interface.
 
 ## Single authoritative task store
 

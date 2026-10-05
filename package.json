@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/hub.js && node --check src/mcp.js && node --check src/adapter.js && node --check src/journal.js && node --check src/server.js",
+    "check": "node --check src/hub.js && node --check src/mcp.js && node --check src/adapter.js && node --check src/journal.js && node --check src/server.js && node --check src/client.js",
     "lint": "eslint src test",
     "typecheck": "tsc --noEmit --strict --skipLibCheck docs/contracts.d.ts"
   },

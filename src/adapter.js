@@ -1,4 +1,11 @@
 import { RESPONSE } from "./hub.js";
+function heartbeatPayload(entry) {
+  return {
+    id: entry.id,
+    fence: entry.fence,
+    ...(entry.run_id ? { run_id: entry.run_id } : {}),
+  };
+}
 // Outbound-only core; client and run service are configured by trusted code, never task data.
 export class Adapter {
   constructor(hub, principal, runs, journal) {
@@ -27,7 +34,7 @@ export class Adapter {
     }
     if (task.state !== "running" || task.fence !== entry.fence)
       throw new Error("reconciliation_requires_approval");
-    await this.hub.heartbeat(this.principal, entry);
+    await this.hub.heartbeat(this.principal, heartbeatPayload(entry));
     const run = entry.run_id
       ? await this.runs.get(entry.run_id)
       : await this.runs.create({
@@ -37,7 +44,7 @@ export class Adapter {
         });
     entry.run_id = run.id;
     this.journal.save(entry);
-    await this.hub.heartbeat(this.principal, entry);
+    await this.hub.heartbeat(this.principal, heartbeatPayload(entry));
     if (run.state === "running") return task.id;
     const success = run.state === "succeeded" && run.text === RESPONSE;
     await this.hub.complete(this.principal, {

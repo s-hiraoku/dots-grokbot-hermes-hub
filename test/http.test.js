@@ -5,6 +5,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Hub, RESPONSE } from "../src/hub.js";
 import { handler } from "../src/mcp.js";
+import { Adapter, MockRuns } from "../src/adapter.js";
+import { MCPHubClient } from "../src/client.js";
 test("official MCP client HTTP initialization/discovery and fixed roundtrip", async () => {
   const hub = new Hub();
   const owner = {
@@ -73,6 +75,42 @@ test("official MCP client HTTP initialization/discovery and fixed roundtrip", as
       result: RESPONSE,
     });
     assert.equal((await call(a, "get", { id: t.id })).state, "succeeded");
+    const adapterTask = await call(a, "submit", {
+      task_type: "connectivity_check",
+      request_key: "http-adapter",
+    });
+    const journal = {
+      entry: null,
+      load() {
+        return this.entry;
+      },
+      save(entry) {
+        this.entry = structuredClone(entry);
+      },
+      clear() {
+        this.entry = null;
+      },
+    };
+    const runs = new MockRuns();
+    const remote = new MCPHubClient(b);
+    const heartbeats = [];
+    const heartbeat = remote.heartbeat.bind(remote);
+    remote.heartbeat = async (principal, args) => {
+      heartbeats.push(structuredClone(args));
+      return heartbeat(principal, args);
+    };
+    await new Adapter(remote, worker, runs, journal).once();
+    assert.equal(
+      (await call(a, "get", { id: adapterTask.id })).state,
+      "succeeded",
+    );
+    assert.equal(journal.load(), null);
+    assert.equal(runs.calls, 1);
+    assert.deepEqual(heartbeats, [
+      { id: adapterTask.id, fence: 1 },
+      { id: adapterTask.id, fence: 1, run_id: "mock-1" },
+    ]);
+
     assert.equal(
       (
         await a.callTool({
