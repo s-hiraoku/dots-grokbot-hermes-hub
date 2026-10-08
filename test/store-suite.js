@@ -155,4 +155,55 @@ export async function storeSuite(t, h) {
       assert.equal(RESPONSE, (await finish(h, task)).result);
     },
   );
+  await check(
+    "atomic grants revoke without restoration on idempotent submit replay",
+    async () => {
+      const reader = {
+        subject: "shared-reader",
+        operations: ["get", "events"],
+      };
+      const requester = {
+        ...owner,
+        resultReaders: [{ subject: reader.subject, notify: true }],
+      };
+      const args = {
+        task_type: "connectivity_check",
+        request_key: "shared-grant",
+      };
+      const task = await h.submit(requester, args);
+      assert.equal(await h.canNotify(reader.subject, task.id), true);
+      assert.deepEqual(Object.keys(await h.view(reader, task)).sort(), [
+        "at",
+        "id",
+        "result",
+        "state",
+      ]);
+      await h.revokeReader(
+        { subject: "shared-operator", operations: ["grants"] },
+        { id: task.id, subject: reader.subject },
+      );
+      await assert.rejects(h.get(reader, task));
+      await h.submit(requester, args);
+      assert.equal(await h.canNotify(reader.subject, task.id), false);
+    },
+  );
+  await check(
+    "worker subject and runner scope isolate an active admission",
+    async () => {
+      await submit(h, "shared-worker-isolation");
+      const scoped = { ...worker, runnerScope: "shared-runner-one" };
+      const task = await h.claim(scoped);
+      for (const other of [
+        { ...scoped, subject: "other-worker" },
+        { ...scoped, runnerScope: "other-scope" },
+      ]) {
+        await assert.rejects(h.get(other, task));
+        await assert.rejects(h.heartbeat(other, task));
+        await assert.rejects(
+          h.complete(other, { ...task, state: "succeeded", result: RESPONSE }),
+        );
+      }
+      assert.equal((await h.get(scoped, task)).state, "running");
+    },
+  );
 }

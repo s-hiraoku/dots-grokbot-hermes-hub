@@ -1,5 +1,5 @@
 import { D1Hub } from "../src/d1.ts";
-import { fetchMCP } from "../src/mcp.ts";
+import { fetchMCP } from "../src/mcp-core.ts";
 import type { Principal } from "../src/types.ts";
 const owner: Principal = {
   subject: "fixture-owner",
