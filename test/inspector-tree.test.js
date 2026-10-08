@@ -110,7 +110,10 @@ test("policy binds system alias targets to measured system roots and bounds tota
       () =>
         new PilotInspector({
           ...p,
-          codeTrees: Array.from({ length: 5 }, () => p.codeTrees[0]),
+          codeTrees: Array.from({ length: 7 }, () => ({
+            ...p.codeTrees[0],
+            maxBytes: 1,
+          })),
         }),
     );
     assert.throws(
@@ -170,5 +173,110 @@ test("default trees reject ACL write and only explicitly reviewed package resour
     await fs.chmod(root, 0o700);
     await fs.chmod(join(root, "logs"), 0o700);
     await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("only declared disabled system site-packages can be omitted; aliases cannot reintroduce them", async () => {
+  const fixture = await policyFixture("http://127.0.0.1:10001/");
+  const lib = join(fixture.root, "lib");
+  const global = join(lib, "python3.11", "site-packages");
+  const lstat = fs.lstat;
+  try {
+    await fs.mkdir(global, { recursive: true });
+    await fs.writeFile(
+      join(global, "unapproved.py"),
+      "fixture excluded package",
+    );
+    await fs.chmod(join(lib, "python3.11"), 0o500);
+    await fs.chmod(lib, 0o500);
+    mock.method(fs, "lstat", async (p) => {
+      const s = await lstat(p);
+      s.uid = 0;
+      return s;
+    });
+    mock.method(fs, "access", async () => {
+      throw Object.assign(new Error("denied"), { code: "EACCES" });
+    });
+    syncBuiltinESMExports();
+    const options = {
+      systemRuntime: true,
+      excludedSystemSitePackages: "python3.11/site-packages",
+    };
+    const digest = await measureCodeTree(lib, Infinity, options);
+    await fs.writeFile(
+      join(global, "unapproved.py"),
+      "changed excluded fixture",
+    );
+    assert.equal(await measureCodeTree(lib, Infinity, options), digest);
+    await assert.rejects(
+      measureCodeTree(lib, Infinity, {
+        ...options,
+        excludedSystemSitePackages: "../site-packages",
+      }),
+    );
+    const p = fixture.policy;
+    const tree = { root: lib, sha256: digest, ...options, maxBytes: 1 };
+    new PilotInspector({ ...p, codeTrees: [...p.codeTrees, tree] });
+    assert.throws(
+      () =>
+        new PilotInspector({
+          ...p,
+          codeTrees: [...p.codeTrees, { ...tree, systemRuntime: false }],
+        }),
+      /pilot_policy_rejected/,
+    );
+    assert.throws(
+      () =>
+        new PilotInspector({
+          ...p,
+          codeTrees: [
+            ...p.codeTrees,
+            { ...tree, aliases: { alias: join(global, "unapproved.py") } },
+          ],
+        }),
+      /pilot_policy_rejected/,
+    );
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+    await fs.chmod(lib, 0o700);
+    await fs.chmod(join(lib, "python3.11"), 0o700);
+    await fixture.cleanup();
+  }
+});
+
+test("process interpreter must be an exact separately measured system runtime", async () => {
+  const fixture = await policyFixture("http://127.0.0.1:10001/");
+  try {
+    const p = fixture.policy;
+    const target = join(fixture.root, "native-launcher");
+    const tree = {
+      root: target,
+      sha256: "a".repeat(64),
+      systemRuntime: true,
+      maxBytes: 1,
+    };
+    new PilotInspector({
+      ...p,
+      processInterpreterPath: target,
+      codeTrees: [...p.codeTrees, tree],
+    });
+    for (const codeTrees of [
+      p.codeTrees,
+      [...p.codeTrees, { ...tree, systemRuntime: false }],
+      [...p.codeTrees, { ...tree, root: fixture.root }],
+    ]) {
+      assert.throws(
+        () =>
+          new PilotInspector({
+            ...p,
+            processInterpreterPath: target,
+            codeTrees,
+          }),
+        /pilot_policy_rejected/,
+      );
+    }
+  } finally {
+    await fixture.cleanup();
   }
 });

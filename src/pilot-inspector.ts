@@ -31,6 +31,10 @@ const treeOptions = z
       )
       .max(8)
       .optional(),
+    excludedSystemSitePackages: z
+      .string()
+      .regex(/^python3\.\d+\/site-packages$/)
+      .optional(),
   })
   .strict();
 type TreeOptions = z.infer<typeof treeOptions>;
@@ -90,6 +94,13 @@ export async function measureCodeTree(
           throw new Error("pilot_code_root_contains_private_data");
         const child = join(path, name),
           sub = relative ? `${relative}/${name}` : name;
+        if (
+          settings.systemRuntime &&
+          sub === settings.excludedSystemSitePackages
+        ) {
+          entries.push([sub, "excluded-disabled-system-site-packages"]);
+          continue;
+        }
         await walk(child, sub);
       }
       const after = await lstat(path);
@@ -123,6 +134,7 @@ const policySchema = z
     sourceRoot: z.string(),
     wrapperPath: z.string(),
     pythonPath: z.string(),
+    processInterpreterPath: z.string().optional(),
     codeTrees: z
       .array(
         treeOptions
@@ -133,7 +145,7 @@ const policySchema = z
           .strict(),
       )
       .min(1)
-      .max(4)
+      .max(6)
       .refine(
         (trees) =>
           trees.reduce((sum, t) => sum + (t.maxBytes ?? 536870912), 0) <=
@@ -244,6 +256,7 @@ export class PilotInspector {
       policy.sourceRoot,
       policy.wrapperPath,
       policy.pythonPath,
+      ...(policy.processInterpreterPath ? [policy.processInterpreterPath] : []),
     ])
       if (resolve(path) !== path) throw new Error("pilot_policy_rejected");
     if (
@@ -261,11 +274,21 @@ export class PilotInspector {
       !policy.codeTrees.some((tree) =>
         policy.pythonPath.startsWith(`${tree.root}/`),
       ) ||
+      (policy.processInterpreterPath !== undefined &&
+        !policy.codeTrees.some(
+          (tree) =>
+            tree.systemRuntime && tree.root === policy.processInterpreterPath,
+        )) ||
       policy.codeTrees.some((tree) => resolve(tree.root) !== tree.root)
     )
       throw new Error("pilot_policy_rejected");
     for (const tree of policy.codeTrees) {
       if (tree.aliases && !tree.systemRuntime)
+        throw new Error("pilot_policy_rejected");
+      if (
+        tree.excludedSystemSitePackages &&
+        (!tree.systemRuntime || !tree.root.endsWith("/lib"))
+      )
         throw new Error("pilot_policy_rejected");
       for (const [relative, target] of Object.entries(tree.aliases ?? {})) {
         if (
@@ -276,7 +299,14 @@ export class PilotInspector {
           !policy.codeTrees.some(
             (t) =>
               t.systemRuntime &&
-              (target === t.root || target.startsWith(`${t.root}/`)),
+              (target === t.root || target.startsWith(`${t.root}/`)) &&
+              (!t.excludedSystemSitePackages ||
+                !(
+                  target === join(t.root, t.excludedSystemSitePackages) ||
+                  target.startsWith(
+                    `${join(t.root, t.excludedSystemSitePackages)}/`,
+                  )
+                )),
           )
         )
           throw new Error("pilot_policy_rejected");
@@ -346,7 +376,8 @@ export class PilotInspector {
       observed.uid !== process.getuid?.() ||
       !Number.isFinite(observed.startedAt) ||
       observed.startedAt > this.#now() ||
-      observed.command !== `${p.pythonPath} ${p.wrapperPath}` ||
+      observed.command !==
+        `${p.processInterpreterPath ?? p.pythonPath} ${p.wrapperPath}` ||
       observed.sourceCommit !== p.sourceCommit ||
       observed.listeners.length !== 1 ||
       observed.listeners[0] !== `127.0.0.1:${url.port}`
@@ -360,6 +391,7 @@ export class PilotInspector {
           maxBytes: tree.maxBytes,
           aliases: tree.aliases,
           reviewedResources: tree.reviewedResources,
+          excludedSystemSitePackages: tree.excludedSystemSitePackages,
         })) !== tree.sha256
       )
         throw new Error("pilot_code_integrity_rejected");
