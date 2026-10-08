@@ -95,6 +95,11 @@ export class Adapter {
     )
       throw new Error("runner_scope_requires_reconciliation");
     if (!entry) {
+      if (
+        (this.principal.runnerScope ?? undefined) !==
+        (this.runs.boundaryId ?? undefined)
+      )
+        throw new Error("runner_scope_mismatch");
       const task = await this.hub.claim(this.principal, {});
       if (!task) return null;
       const admitted = now();

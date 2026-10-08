@@ -35,7 +35,13 @@ test("fixed pilot mock API roundtrip uses only fixed body, no toolsets route, ex
     const runs = await HermesRuns.connectPilot(opts(fixture, policy));
     assert.equal(runs.admissionContract, "hermes-hub-fixed-pilot-v1");
     const task = await submit(h);
-    await new Adapter(h, worker, runs, receipt, { now: policy.now }).run();
+    await new Adapter(
+      h,
+      { ...worker, runnerScope: runs.boundaryId },
+      runs,
+      receipt,
+      { now: policy.now },
+    ).run();
     assert.equal((await h.get(owner, task)).result, RESPONSE);
     assert.equal(fixture.state.calls, 1);
     assert.equal(receipt.load(), null);
@@ -169,9 +175,7 @@ for (const defect of [
             },
           }),
         ),
-        defect === "404"
-          ? /hermes_http_404/
-          : /pilot_capabilities_unverified/,
+        defect === "404" ? /hermes_http_404/ : /pilot_capabilities_unverified/,
       );
       assert.equal(admissions, 0);
     } finally {
@@ -199,7 +203,13 @@ test("pilot rejects nonexact output; terminal uncertainty preserves receipt and 
     );
     const task = await submit(h);
     await assert.rejects(
-      new Adapter(h, worker, runs, receipt, { now: policy.now }).run(),
+      new Adapter(
+        h,
+        { ...worker, runnerScope: runs.boundaryId },
+        runs,
+        receipt,
+        { now: policy.now },
+      ).run(),
       /terminal_requires_reconciliation/,
     );
     assert.ok(receipt.load().run_id);
@@ -219,7 +229,7 @@ test("old standard contract unknown receipt cannot be replayed through fixed pil
   try {
     const runs = await HermesRuns.connectPilot(opts(fixture, policy));
     await submit(h);
-    const task = await h.claim(worker);
+    const task = await h.claim({ ...worker, runnerScope: runs.boundaryId });
     const admitted = policy.now();
     receipt.save({
       id: task.id,
@@ -235,7 +245,13 @@ test("old standard contract unknown receipt cannot be replayed through fixed pil
       },
     });
     await assert.rejects(
-      new Adapter(h, worker, runs, receipt, { now: policy.now }).once(),
+      new Adapter(
+        h,
+        { ...worker, runnerScope: runs.boundaryId },
+        runs,
+        receipt,
+        { now: policy.now },
+      ).once(),
       /replay_contract_requires_reconciliation/,
     );
     assert.equal(fixture.state.calls, 0);
@@ -297,7 +313,13 @@ test("known pilot admission reconciles by ID after journal reopen; lost ACK reus
       }),
     );
     await assert.rejects(
-      new Adapter(h, worker, runs, receipt, { now: policy.now }).once(),
+      new Adapter(
+        h,
+        { ...worker, runnerScope: runs.boundaryId },
+        runs,
+        receipt,
+        { now: policy.now },
+      ).once(),
       /fixture_ack_lost/,
     );
     const original = receipt.load();
@@ -305,13 +327,25 @@ test("known pilot admission reconciles by ID after journal reopen; lost ACK reus
     receipt.close();
     receipt = new Journal(join(policy.root, "receipt.db"));
     const recovered = await HermesRuns.connectPilot(opts(fixture, policy));
-    await new Adapter(h, worker, recovered, receipt, {
-      now: policy.now,
-    }).once();
+    await new Adapter(
+      h,
+      { ...worker, runnerScope: recovered.boundaryId },
+      recovered,
+      receipt,
+      {
+        now: policy.now,
+      },
+    ).once();
     assert.equal(receipt.load().run_id, "run_fixture1");
     receipt.close();
     receipt = new Journal(join(policy.root, "receipt.db"));
-    await new Adapter(h, worker, recovered, receipt, { now: policy.now }).run();
+    await new Adapter(
+      h,
+      { ...worker, runnerScope: recovered.boundaryId },
+      recovered,
+      receipt,
+      { now: policy.now },
+    ).run();
     assert.equal((await h.get(owner, task)).result, RESPONSE);
     assert.equal(fixture.state.calls, 1);
     assert.equal(receipt.load(), null);

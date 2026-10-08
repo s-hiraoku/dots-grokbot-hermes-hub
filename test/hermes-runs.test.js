@@ -282,7 +282,12 @@ test("unknown HTTP admission survives journal reopen and replays the same key", 
       },
     });
     await assert.rejects(
-      new Adapter(hub, worker, runs, receipt).once(),
+      new Adapter(
+        hub,
+        { ...worker, runnerScope: runs.boundaryId },
+        runs,
+        receipt,
+      ).once(),
       /fixture_ack_lost/,
     );
     const key = receipt.load().key;
@@ -293,7 +298,7 @@ test("unknown HTTP admission survives journal reopen and replays the same key", 
     assert.equal(receipt.load().key, key);
     await new Adapter(
       hub,
-      worker,
+      { ...worker, runnerScope: runs.boundaryId },
       await HermesRuns.connect(fixture.options),
       receipt,
     ).run();
@@ -362,7 +367,12 @@ test("persisted admission scope mismatch rejects recovery before another claim/c
       runner_scope: "different-endpoint-or-credential-scope",
     });
     await assert.rejects(
-      new Adapter(h, worker, runs, receipt).once(),
+      new Adapter(
+        h,
+        { ...worker, runnerScope: runs.boundaryId },
+        runs,
+        receipt,
+      ).once(),
       /runner_scope_requires_reconciliation/,
     );
     assert.equal((await h.get(worker, task)).execution_open, 1);
@@ -434,7 +444,13 @@ for (const mode of [
       await submit(h);
       const first = await HermesRuns.connect(config);
       await assert.rejects(
-        new Adapter(h, worker, first, receipt, { now: () => now }).once(),
+        new Adapter(
+          h,
+          { ...worker, runnerScope: first.boundaryId },
+          first,
+          receipt,
+          { now: () => now },
+        ).once(),
         /fixture_ack_lost/,
       );
       const saved = receipt.load();
@@ -450,13 +466,22 @@ for (const mode of [
       const reconnected = await HermesRuns.connect(config);
       if (mode === "expiry-during-preflight") cross = true;
       await assert.rejects(
-        new Adapter(h, worker, reconnected, receipt, { now: () => now }).once(),
+        new Adapter(
+          h,
+          { ...worker, runnerScope: reconnected.boundaryId },
+          reconnected,
+          receipt,
+          { now: () => now },
+        ).once(),
         /replay_contract_requires_reconciliation|idempotency_horizon_expired/,
       );
       assert.equal(calls, 1);
       assert.equal(receipt.load().run_id, null);
       assert.deepEqual(receipt.load().replay, saved.replay);
-      const persisted = await h.get(worker, saved);
+      const persisted = await h.get(
+        { ...worker, runnerScope: first.boundaryId },
+        saved,
+      );
       assert.equal(persisted.state, "running");
       assert.equal(persisted.execution_open, 1);
     } finally {
