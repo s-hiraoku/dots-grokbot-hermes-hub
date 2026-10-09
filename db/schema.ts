@@ -5,6 +5,7 @@ import {
   uniqueIndex,
   index,
   check,
+  primaryKey,
 } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 export const tasks = sqliteTable(
@@ -81,6 +82,7 @@ export const accessAudit = sqliteTable("access_audit", {
   at: integer().notNull(),
 });
 export const subscriptions = sqliteTable("subscriptions", {
+  client_id: text(),
   id: text().primaryKey(),
   subject: text().notNull(),
   task: text().notNull(),
@@ -116,3 +118,51 @@ export const deliveries = sqliteTable(
     ),
   ],
 );
+
+export const authorizationState = sqliteTable(
+  "authorization_state",
+  {
+    kind: text().notNull(),
+    target: text().notNull(),
+    stopped: integer().notNull(),
+    epoch: integer().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.kind, t.target] }),
+    check(
+      "authorization_kind",
+      sql`${t.kind} IN ('global','subject','client')`,
+    ),
+    check("authorization_target", sql`length(${t.target}) BETWEEN 1 AND 200`),
+    check("authorization_stopped", sql`${t.stopped} IN (0,1)`),
+    check("authorization_epoch", sql`${t.epoch}>=0`),
+    check("authorization_global", sql`${t.kind}<>'global' OR ${t.target}='*'`),
+  ],
+);
+export const authorizationChecks = sqliteTable(
+  "authorization_checks",
+  {
+    id: integer().primaryKey(),
+    subject: text().notNull(),
+    client: text(),
+    epoch: integer(),
+  },
+  (t) => [check("authorization_check_singleton", sql`${t.id}=1`)],
+);
+export const authorizationControlChecks = sqliteTable(
+  "authorization_control_checks",
+  {
+    id: integer().primaryKey(),
+    epoch: integer().notNull(),
+  },
+  (t) => [check("authorization_control_singleton", sql`${t.id}=1`)],
+);
+export const authorizationAudit = sqliteTable("authorization_audit", {
+  seq: integer().primaryKey({ autoIncrement: true }),
+  kind: text().notNull(),
+  target: text().notNull(),
+  stopped: integer().notNull(),
+  epoch: integer().notNull(),
+  actor: text().notNull(),
+  at: integer().notNull(),
+});

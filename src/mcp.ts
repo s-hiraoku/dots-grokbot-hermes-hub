@@ -22,7 +22,13 @@ export function handler(
       res.end(await metadata.text());
       return;
     }
-    const p = await authenticate(req);
+    let p: Principal | null = null;
+    try {
+      const verified = await authenticate(req);
+      if (verified) p = await hub.authorization.bind(verified);
+    } catch {
+      /* Authentication or authoritative DB failure denies admission. */
+    }
     if (!p) {
       res.writeHead(
         401,

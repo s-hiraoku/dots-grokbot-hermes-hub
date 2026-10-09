@@ -1,3 +1,4 @@
+import { DurableAuthorization } from "./authorization.ts";
 import {
   RESPONSE,
   type Runs,
@@ -16,6 +17,7 @@ const stmt = (
 ): Statement => ({ sql, params });
 export class TaskService {
   readonly driver: Driver;
+  readonly authorization: DurableAuthorization;
   now: () => number;
   readonly leaseMs: number;
   constructor(
@@ -24,6 +26,7 @@ export class TaskService {
     leaseMs = 30000,
   ) {
     this.driver = driver;
+    this.authorization = new DurableAuthorization(driver);
     this.now = now;
     this.leaseMs = leaseMs;
   }
@@ -37,7 +40,8 @@ export class TaskService {
   }
   async get(p: Principal, a: { id: string }) {
     this.principal(p, "get");
-    const r = await this.driver.batch([
+    p = await this.authorization.bind(p);
+    const r = await this.authorization.batch(p, [
       stmt(
         "SELECT * FROM tasks WHERE id=? AND (owner=? OR (destination=? AND runner_subject=? AND runner_scope IS ?) OR EXISTS(SELECT 1 FROM task_access g WHERE g.task=tasks.id AND g.subject=?))",
         a.id,
@@ -52,6 +56,7 @@ export class TaskService {
   }
   async submit(p: Principal, a: { task_type: string; request_key: string }) {
     this.principal(p, "submit");
+    p = await this.authorization.bind(p);
     if (
       a.task_type !== "connectivity_check" ||
       !/^[a-zA-Z0-9_-]{1,80}$/.test(a.request_key) ||
@@ -70,7 +75,7 @@ export class TaskService {
       )
     )
       throw new Error("invalid_grant_policy");
-    const r = await this.driver.batch([
+    const r = await this.authorization.batch(p, [
       stmt(
         `INSERT OR IGNORE INTO tasks(id,owner,destination,request_key,state,actor,at,mutation) VALUES(?,?,?,?,'queued',?,${clock},?)`,
         crypto.randomUUID(),
@@ -102,11 +107,12 @@ export class TaskService {
   }
   async claim(p: Principal, a: Record<string, never> = {}) {
     this.principal(p, "claim");
+    p = await this.authorization.bind(p);
     if (p.worker !== "hermes" || Object.keys(a).length)
       throw new Error("forbidden");
     const clock = this.driver.nowSQL;
     const mutation = crypto.randomUUID();
-    const r = await this.driver.batch([
+    const r = await this.authorization.batch(p, [
       stmt(
         `UPDATE tasks SET state='waiting_approval',fence=fence+1,lease=NULL,actor=?,at=${clock},mutation=? WHERE destination=? AND state='running' AND lease<=${clock}`,
         p.subject,
@@ -129,9 +135,10 @@ export class TaskService {
   }
   async heartbeat(p: Principal, a: Lease & { run_id?: string }) {
     this.principal(p, "heartbeat");
+    p = await this.authorization.bind(p);
     const clock = this.driver.nowSQL;
     const mutation = crypto.randomUUID();
-    const r = await this.driver.batch([
+    const r = await this.authorization.batch(p, [
       stmt(
         `UPDATE tasks SET lease=${clock}+?,run_id=COALESCE(run_id,?),actor=?,at=${clock},mutation=? WHERE id=? AND destination=? AND runner_subject=? AND runner_scope IS ? AND fence=? AND state='running' AND lease>${clock} AND (? IS NULL OR run_id IS NULL OR run_id=?)`,
         this.leaseMs,
@@ -155,6 +162,7 @@ export class TaskService {
     a: Lease & { state: "succeeded" | "failed"; result: string },
   ) {
     this.principal(p, "complete");
+    p = await this.authorization.bind(p);
     if (
       !["succeeded", "failed"].includes(a.state) ||
       (a.state === "succeeded"
@@ -163,7 +171,7 @@ export class TaskService {
     )
       throw new Error("invalid_result");
     const clock = this.driver.nowSQL;
-    const r = await this.driver.batch([
+    const r = await this.authorization.batch(p, [
       stmt(
         `UPDATE tasks SET state=?,result=?,lease=NULL,execution_open=0,actor=?,at=${clock},mutation=? WHERE id=? AND destination=? AND runner_subject=? AND runner_scope IS ? AND fence=? AND state='running' AND lease>${clock}`,
         a.state,
@@ -191,8 +199,9 @@ export class TaskService {
   }
   async cancel(p: Principal, a: { id: string }) {
     this.principal(p, "cancel");
+    p = await this.authorization.bind(p);
     const clock = this.driver.nowSQL;
-    const r = await this.driver.batch([
+    const r = await this.authorization.batch(p, [
       stmt(
         `UPDATE tasks SET state='cancelled',fence=fence+1,lease=NULL,actor=?,at=${clock},mutation=? WHERE id=? AND owner=? AND state NOT IN ('succeeded','failed','cancelled')`,
         p.subject,
@@ -226,8 +235,9 @@ export class TaskService {
   }
   async revokeReader(p: Principal, a: { id: string; subject: string }) {
     this.principal(p, "grants");
+    p = await this.authorization.bind(p);
     const clock = this.driver.nowSQL;
-    await this.driver.batch([
+    await this.authorization.batch(p, [
       stmt(
         `INSERT INTO access_audit(task,subject,actor,action,at) SELECT task,subject,?,'revoked',${clock} FROM task_access WHERE task=? AND subject=?`,
         p.subject,
@@ -248,14 +258,18 @@ export class TaskService {
   }
   async reconciliationTask(p: Principal, id: string) {
     this.principal(p, "reconcile");
+    p = await this.authorization.bind(p);
     return this.row(
       (
-        await this.driver.batch([stmt("SELECT * FROM tasks WHERE id=?", id)])
+        await this.authorization.batch(p, [
+          stmt("SELECT * FROM tasks WHERE id=?", id),
+        ])
       )[0],
     );
   }
   async reconcile(p: Principal, a: { id: string; fence: number }, runs: Runs) {
     this.principal(p, "reconcile");
+    p = await this.authorization.bind(p);
     const task = await this.reconciliationTask(p, a.id);
     if (
       !task.run_id ||
@@ -287,9 +301,10 @@ export class TaskService {
     a: { id: string; fence: number; run_id: string; runner_scope: string },
   ) {
     this.principal(p, "reconcile");
+    p = await this.authorization.bind(p);
     const clock = this.driver.nowSQL;
     const mutation = crypto.randomUUID();
-    const r = await this.driver.batch([
+    const r = await this.authorization.batch(p, [
       stmt(
         `UPDATE tasks SET state=CASE WHEN state='cancelled' THEN state ELSE 'succeeded' END,result=CASE WHEN state='cancelled' THEN result ELSE ? END,execution_open=0,lease=NULL,fence=fence+1,actor=?,at=${clock},mutation=? WHERE id=? AND execution_open=1 AND fence=? AND run_id=? AND runner_scope=? AND (state IN ('waiting_approval','cancelled') OR (state='running' AND lease<=${clock}))`,
         RESPONSE,
@@ -306,7 +321,8 @@ export class TaskService {
   }
   async pending(p: Principal) {
     this.principal(p, "events");
-    const r = await this.driver.batch([
+    p = await this.authorization.bind(p);
+    const r = await this.authorization.batch(p, [
       stmt(
         "SELECT * FROM outbox WHERE owner=? AND delivered=0 ORDER BY at,id",
         p.subject,
@@ -316,7 +332,8 @@ export class TaskService {
   }
   async ack(p: Principal, id: string) {
     this.principal(p, "events");
-    await this.driver.batch([
+    p = await this.authorization.bind(p);
+    await this.authorization.batch(p, [
       stmt(
         "UPDATE outbox SET delivered=1 WHERE id=? AND owner=?",
         id,

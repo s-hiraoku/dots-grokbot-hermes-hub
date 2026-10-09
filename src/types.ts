@@ -18,6 +18,10 @@ export type Operation =
   | "grants"
   | "reconcile";
 export interface Principal {
+  /** Static verified client binding; never a caller argument. */
+  clientId?: string;
+  /** DB epoch captured at the authenticated HTTP boundary. */
+  authorizationEpoch?: number;
   subject: string;
   operations: readonly Operation[];
   destination?: "hermes";

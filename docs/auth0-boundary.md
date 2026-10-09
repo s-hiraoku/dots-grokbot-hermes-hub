@@ -111,3 +111,14 @@ Official references:
 - [Auth0 MCP authorization](https://auth0.com/ai/docs/mcp/get-started/authorization-for-your-mcp-server)
 - [Auth0 JWKS](https://auth0.com/docs/secure/tokens/json-web-tokens/json-web-key-sets)
 - [Auth0 token practices](https://auth0.com/docs/secure/tokens/token-best-practices)
+
+
+## Local durable denial boundary
+
+The local follow-up [durable stop gate](durable-stop-gate.md) now supplies shared
+DB global/subject/client stops and per-operation epoch fencing, automatically used
+by the HTTP handlers and TaskService. `ApprovedSubjects` still supplies explicit
+static enrollment and its local live gate; enabling that registry cannot bypass a
+persisted stop. Deployment, operator access, revocation synchronization and real
+client interoperability remain unconfigured. Notification `identityActive` is
+still an additional required callback; its success cannot bypass the DB gate.

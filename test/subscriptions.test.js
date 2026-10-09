@@ -480,3 +480,130 @@ test("same-key refresh reuses verification only within the original bounded cach
     f.h.close();
   }
 });
+
+for (const kind of ["global", "subject", "client"])
+  test(`durable ${kind} stop suppresses pending notifications after restore and service recreation`, async () => {
+    const f = await fixture();
+    const reader = { ...observer, clientId: "notification-client" };
+    const target = {
+      kind,
+      id:
+        kind === "global"
+          ? "*"
+          : kind === "subject"
+            ? reader.subject
+            : reader.clientId,
+    };
+    try {
+      await f.service.subscribe(reader, args(f.task.id));
+      await f.finish();
+      await f.h.authorization.setStopped(target, true, 0, "fixture-maintainer");
+      assert.equal(await f.serviceFor(f.h).dispatchOne(), false);
+      await f.h.authorization.setStopped(
+        target,
+        false,
+        1,
+        "fixture-maintainer",
+      );
+      assert.equal(await f.serviceFor(f.h).dispatchOne(), false);
+      assert.equal(f.received.length, 0);
+      const row = f.h.sqlite.db.prepare("SELECT * FROM subscriptions").get();
+      assert.equal(row.client_id, reader.clientId);
+      assert.equal(row.active, 0);
+      assert.equal(row.revision, 2);
+      // An explicit fresh subscribe is required; stopped subscriptions never revive themselves.
+      await f.service.subscribe(reader, args(f.task.id));
+      await f.service.dispatchOne();
+      assert.equal(f.received.length, 1);
+    } finally {
+      f.h.close();
+    }
+  });
+test("stop and restore during callback challenge cannot activate the old subscription attempt", async () => {
+  const f = await fixture();
+  try {
+    f.onVerification(async () => {
+      await f.h.authorization.setStopped(
+        { kind: "subject", id: observer.subject },
+        true,
+        0,
+        "fixture-maintainer",
+      );
+      await f.h.authorization.setStopped(
+        { kind: "subject", id: observer.subject },
+        false,
+        1,
+        "fixture-maintainer",
+      );
+    });
+    await assert.rejects(
+      f.service.subscribe(
+        { ...observer, clientId: "notification-client" },
+        args(f.task.id),
+      ),
+    );
+    assert.equal(
+      f.h.sqlite.db.prepare("SELECT active FROM subscriptions").get().active,
+      0,
+    );
+    assert.equal(f.received.length, 0);
+  } finally {
+    f.h.close();
+  }
+});
+test("stop and restore during delivery acknowledgement fences delivered-state commit and retry", async () => {
+  const f = await fixture();
+  try {
+    await f.service.subscribe(
+      { ...observer, clientId: "notification-client" },
+      args(f.task.id),
+    );
+    await f.finish();
+    f.onDelivery(async () => {
+      await f.h.authorization.setStopped(
+        { kind: "client", id: "notification-client" },
+        true,
+        0,
+        "fixture-maintainer",
+      );
+      await f.h.authorization.setStopped(
+        { kind: "client", id: "notification-client" },
+        false,
+        1,
+        "fixture-maintainer",
+      );
+    });
+    await f.service.dispatchOne();
+    assert.equal(f.received.length, 1); // Already sent bytes cannot be retracted.
+    assert.notEqual(
+      f.h.sqlite.db.prepare("SELECT state FROM deliveries").get().state,
+      "delivered",
+    );
+    f.advance(31000);
+    assert.equal(await f.serviceFor(f.h).dispatchOne(), false);
+    assert.equal(f.received.length, 1);
+  } finally {
+    f.h.close();
+  }
+});
+test("durable client stop also disables legacy subscriptions without client attribution", async () => {
+  const f = await fixture();
+  try {
+    await f.service.subscribe(observer, args(f.task.id));
+    await f.finish();
+    await f.h.authorization.setStopped(
+      { kind: "client", id: "any-client" },
+      true,
+      0,
+      "fixture-maintainer",
+    );
+    assert.equal(
+      f.h.sqlite.db.prepare("SELECT active FROM subscriptions").get().active,
+      0,
+    );
+    assert.equal(await f.service.dispatchOne(), false);
+    assert.equal(f.received.length, 0);
+  } finally {
+    f.h.close();
+  }
+});

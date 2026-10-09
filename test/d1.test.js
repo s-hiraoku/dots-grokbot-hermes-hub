@@ -12,6 +12,7 @@ import { Adapter, MockRuns } from "../src/adapter.ts";
 import { MCPHubClient } from "../src/client.ts";
 import { owner, worker, submit, journal, finish } from "./fixtures.js";
 import { SecretVault, SubscriptionService } from "../src/subscriptions.ts";
+import { authorizationSuite } from "./authorization-suite.js";
 import { storeSuite } from "./store-suite.js";
 const options = (path) =>
   convertV4MiniflareOptions({
@@ -170,6 +171,25 @@ test("local Worker D1 contract, concurrent calls and HTTP adapter roundtrip", as
     await mf.dispose();
   }
 });
+test("D1 durable authorization contract and cross-instance stop persistence", async (t) => {
+  const mf = new Miniflare(options("dist/worker.js"));
+  try {
+    const db = await mf.getD1Database("DB");
+    await migrate(db);
+    const h = new D1Hub(db);
+    await authorizationSuite(t, h);
+    // The last contract test removes the global row deliberately; restore only the fixture.
+    await db
+      .prepare("INSERT INTO authorization_state VALUES('global','*',1,10)")
+      .run();
+    assert.equal(
+      await new D1Hub(db).authorization.isActive(owner.subject),
+      false,
+    );
+  } finally {
+    await mf.dispose();
+  }
+});
 test("production Worker denies forged headers by default", async () => {
   const mf = new Miniflare(options("dist/worker.js"));
   try {
@@ -195,6 +215,43 @@ test("local D1 persists task state after emulator restart", async () => {
     mf = new Miniflare(config);
     db = await mf.getD1Database("DB");
     assert.equal((await new D1Hub(db).get(owner, task)).state, "queued");
+  } finally {
+    await mf.dispose();
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test("local D1 emulator restart preserves the committed global stop and audit", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "hub-d1-stop-fixture-"));
+  const config = { ...options("dist/worker.js"), resourcePersistencePath: dir };
+  let mf = new Miniflare(config);
+  try {
+    let db = await mf.getD1Database("DB");
+    await migrate(db);
+    const h = new D1Hub(db);
+    const task = await submit(h, "d1-stop-restart");
+    await h.authorization.setStopped(
+      { kind: "global", id: "*" },
+      true,
+      0,
+      "fixture-maintainer",
+    );
+    await mf.dispose();
+    mf = new Miniflare(config);
+    db = await mf.getD1Database("DB");
+    const reopened = new D1Hub(db);
+    await assert.rejects(reopened.get(owner, task), /authorization_rejected/);
+    const rows = await reopened.driver.batch([
+      {
+        sql: "SELECT stopped,epoch FROM authorization_state WHERE kind='global'",
+      },
+      { sql: "SELECT actor FROM authorization_audit" },
+      { sql: "SELECT state FROM tasks WHERE id=?", params: [task.id] },
+    ]);
+    assert.equal(rows[0][0].stopped, 1);
+    assert.equal(rows[0][0].epoch, 1);
+    assert.equal(rows[1][0].actor, "fixture-maintainer");
+    assert.equal(rows[2][0].state, "queued");
   } finally {
     await mf.dispose();
     rmSync(dir, { recursive: true });

@@ -134,7 +134,13 @@ export async function fetchMCP(
     request.method,
   );
   if (metadata) return metadata;
-  const p = await authenticate(request);
+  let p: Principal | null = null;
+  try {
+    const verified = await authenticate(request);
+    if (verified) p = await hub.authorization.bind(verified);
+  } catch {
+    /* Authentication or authoritative DB failure denies admission. */
+  }
   if (!p)
     return new Response(null, {
       status: 401,

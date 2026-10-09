@@ -185,6 +185,7 @@ export class PinnedJWTVerifier {
       // Subject-specific static policy, never claims.agent/reader/role or caller headers.
       return Object.freeze({
         subject: p.subject,
+        ...(p.clientId ? { clientId: p.clientId } : {}),
         operations: Object.freeze(operations),
         ...(p.destination ? { destination: p.destination } : {}),
         ...(p.worker ? { worker: p.worker, runnerScope: p.runnerScope } : {}),
