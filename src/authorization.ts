@@ -16,7 +16,11 @@ export class DurableAuthorization {
     this.driver = driver;
   }
 
-  async batch(p: Principal, statements: Statement[]): Promise<Row[][]> {
+  async batch(
+    p: Principal,
+    statements: Statement[],
+    peers: readonly { subject: string; clientId: string }[] = [],
+  ): Promise<Row[][]> {
     if (
       !p?.subject ||
       p.subject.length > 200 ||
@@ -34,10 +38,19 @@ export class DurableAuthorization {
         p.clientId ?? null,
         p.authorizationEpoch ?? null,
       ),
+      ...peers.flatMap((peer) => [
+        sql("DELETE FROM authorization_checks WHERE id=1"),
+        sql(
+          "INSERT INTO authorization_checks(id,subject,client,epoch) VALUES(1,?,?,?)",
+          peer.subject,
+          peer.clientId,
+          p.authorizationEpoch ?? null,
+        ),
+      ]),
       ...statements,
       sql("DELETE FROM authorization_checks WHERE id=1"),
     ]);
-    return rows.slice(1, -1);
+    return rows.slice(1 + peers.length * 2, -1);
   }
 
   async bind(p: Principal): Promise<Principal> {

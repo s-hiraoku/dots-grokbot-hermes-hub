@@ -1,3 +1,4 @@
+import { pingSuite } from "./ping-suite.js";
 import { verifyInventoryUpgrade } from "./inventory-upgrade.js";
 import { inventorySuite } from "./inventory-suite.js";
 import { test } from "node:test";
@@ -277,6 +278,17 @@ test("D1 legacy upgrade preserves task/notification/stop data and triggers, with
     const db = await mf.getD1Database("DB");
     await migrate(db, "0006");
     await verifyInventoryUpgrade(new D1Hub(db).driver);
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test("D1 fixed bidirectional diagnostic contract", async (t) => {
+  const mf = new Miniflare(options("dist/worker.js"));
+  try {
+    const db = await mf.getD1Database("DB");
+    await migrate(db);
+    await pingSuite(t, new D1Hub(db));
   } finally {
     await mf.dispose();
   }

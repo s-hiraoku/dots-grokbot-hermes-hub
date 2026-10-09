@@ -50,6 +50,13 @@
       "when": 1791587560026,
       "tag": "0006_shift_log_inventory",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791589403339,
+      "tag": "0007_bidirectional_ping",
+      "breakpoints": true
     }
   ]
 }

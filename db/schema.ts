@@ -169,3 +169,82 @@ export const authorizationAudit = sqliteTable("authorization_audit", {
   actor: text().notNull(),
   at: integer().notNull(),
 });
+
+export const diagnosticPings = sqliteTable(
+  "diagnostic_pings",
+  {
+    id: text().primaryKey(),
+    correlation_id: text().notNull(),
+    request_key: text().notNull(),
+    sender_side: text().notNull(),
+    recipient_side: text().notNull(),
+    sender_subject: text().notNull(),
+    sender_client: text().notNull(),
+    recipient_subject: text().notNull(),
+    recipient_client: text().notNull(),
+    state: text().notNull(),
+    created: integer().notNull(),
+    expires: integer().notNull(),
+    authorization_epoch: integer().notNull(),
+    reply_id: text(),
+    replied_at: integer(),
+    actor_subject: text().notNull(),
+    actor_client: text().notNull(),
+    at: integer().notNull(),
+  },
+  (t) => [
+    uniqueIndex("diagnostic_request_key").on(
+      t.sender_subject,
+      t.sender_client,
+      t.request_key,
+    ),
+    uniqueIndex("diagnostic_correlation").on(t.correlation_id),
+    uniqueIndex("diagnostic_reply_id").on(t.reply_id),
+    check(
+      "diagnostic_sides",
+      sql`${t.sender_side} IN ('dots','grok') AND ${t.recipient_side} IN ('dots','grok') AND ${t.sender_side}<>${t.recipient_side}`,
+    ),
+    check(
+      "diagnostic_state",
+      sql`${t.state} IN ('pending','replied','expired')`,
+    ),
+    check(
+      "diagnostic_ttl",
+      sql`${t.expires}-${t.created} BETWEEN 1000 AND 300000`,
+    ),
+    check(
+      "diagnostic_reply",
+      sql`(${t.state}='replied' AND ${t.reply_id} IS NOT NULL AND ${t.replied_at} IS NOT NULL) OR (${t.state}<>'replied' AND ${t.reply_id} IS NULL AND ${t.replied_at} IS NULL)`,
+    ),
+  ],
+);
+export const diagnosticOutbox = sqliteTable(
+  "diagnostic_outbox",
+  {
+    id: text().primaryKey(),
+    request_id: text().notNull(),
+    recipient_side: text().notNull(),
+    kind: text().notNull(),
+    delivery: text().notNull().default("pending"),
+    at: integer().notNull(),
+  },
+  (t) => [
+    uniqueIndex("diagnostic_event").on(t.request_id, t.kind),
+    check(
+      "diagnostic_delivery",
+      sql`${t.delivery} IN ('pending','attempted','accepted','failed','uncertain')`,
+    ),
+    check(
+      "diagnostic_kind",
+      sql`${t.kind} IN ('requested','replied','expired')`,
+    ),
+  ],
+);
+export const diagnosticAudit = sqliteTable("diagnostic_audit", {
+  seq: integer().primaryKey({ autoIncrement: true }),
+  request_id: text().notNull(),
+  actor_subject: text().notNull(),
+  actor_client: text().notNull(),
+  state: text().notNull(),
+  at: integer().notNull(),
+});

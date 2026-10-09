@@ -1,3 +1,4 @@
+import { pingSchemas, type PingService } from "./ping.ts";
 import { taskTypes, canonicalResult } from "./task-contract.ts";
 import {
   McpServer,
@@ -52,7 +53,12 @@ export const schemas = {
     })
     .strict(),
 };
-export function createMCP(hub: TaskService, p: Principal, events?: EventAPI) {
+export function createMCP(
+  hub: TaskService,
+  p: Principal,
+  events?: EventAPI,
+  ping?: PingService,
+) {
   const server = new McpServer({ name: "agent-hub", version: "0.2.0" });
   const invoke = async (name: string, args: unknown) => {
     switch (name) {
@@ -96,6 +102,39 @@ export function createMCP(hub: TaskService, p: Principal, events?: EventAPI) {
         }
       },
     );
+  if (ping) {
+    for (const [name, schema] of Object.entries(pingSchemas)) {
+      server.registerTool(
+        name,
+        {
+          description: "Fixed diagnostic ping/pong only",
+          inputSchema: schema,
+          _meta: {
+            securitySchemes: [{ type: "oauth2", scopes: [`hub:${name}`] }],
+          },
+        },
+        async (args: unknown) => {
+          try {
+            const method = {
+              ping_submit: "submit",
+              ping_get: "get",
+              ping_reply: "reply",
+              ping_pending: "pending",
+            }[name] as "submit" | "get" | "reply" | "pending";
+            const value = await ping[method](p, args);
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(value) }],
+            };
+          } catch {
+            return {
+              isError: true,
+              content: [{ type: "text" as const, text: "Operation rejected" }],
+            };
+          }
+        },
+      );
+    }
+  }
   if (events) {
     const eventCall = async (
       work: () => Promise<unknown>,
@@ -136,6 +175,7 @@ export async function fetchMCP(
   authenticate: (req: Request) => Promise<Principal | null> = async () => null,
   events?: EventAPI,
   oauth?: OAuthResource,
+  ping?: PingService,
 ): Promise<Response> {
   const metadata = oauth?.response(
     new URL(request.url).pathname,
@@ -158,5 +198,5 @@ export async function fetchMCP(
     });
   if (new URL(request.url).pathname !== "/mcp" || request.method !== "POST")
     return new Response(null, { status: 405 });
-  return createMcpHandler(() => createMCP(hub, p, events)).fetch(request);
+  return createMcpHandler(() => createMCP(hub, p, events, ping)).fetch(request);
 }

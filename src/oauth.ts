@@ -2,7 +2,16 @@ import { z } from "zod";
 import { PinnedJWTVerifier } from "./auth.ts";
 import type { Principal } from "./types.ts";
 
-const scopes = ["hub:submit", "hub:get", "hub:cancel", "hub:events"] as const;
+const scopes = [
+  "hub:submit",
+  "hub:get",
+  "hub:cancel",
+  "hub:events",
+  "hub:ping_submit",
+  "hub:ping_get",
+  "hub:ping_reply",
+  "hub:ping_pending",
+] as const;
 function httpsURL(value: string) {
   const url = new URL(value);
   if (
@@ -32,8 +41,8 @@ export class OAuthResource {
       z
         .array(z.enum(scopes))
         .min(1)
-        .max(4)
-        .parse(options.userScopes ?? [...scopes]),
+        .max(8)
+        .parse(options.userScopes ?? scopes.slice(0, 4)),
     );
     const issuer = httpsURL(options.issuer);
     const resource = httpsURL(options.resource);
@@ -105,6 +114,10 @@ const approval = z
           "complete",
           "grants",
           "reconcile",
+          "ping_submit",
+          "ping_get",
+          "ping_reply",
+          "ping_pending",
         ]),
       )
       .min(1),

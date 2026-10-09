@@ -17,7 +17,11 @@ export type Operation =
   | "cancel"
   | "events"
   | "grants"
-  | "reconcile";
+  | "reconcile"
+  | "ping_submit"
+  | "ping_get"
+  | "ping_reply"
+  | "ping_pending";
 export interface Principal {
   /** Static verified client binding; never a caller argument. */
   clientId?: string;

@@ -10,6 +10,10 @@ const operation = z.enum([
   "events",
   "grants",
   "reconcile",
+  "ping_submit",
+  "ping_get",
+  "ping_reply",
+  "ping_pending",
 ]);
 const policySchema = z
   .array(
