@@ -1,3 +1,4 @@
+import { taskRequest, canonicalResult, taskFailure } from "./task-contract.ts";
 import {
   RESPONSE,
   type Receipt,
@@ -86,6 +87,12 @@ export class Adapter {
     checkStop();
     if (!this.runs.toolIsolationVerified || !this.runs.durableIdempotency)
       throw new Error("runner_boundary_unverified");
+    if (
+      !(this.principal.taskTypes ?? ["connectivity_check"]).every((type) =>
+        (this.runs.supportedTaskTypes ?? ["connectivity_check"]).includes(type),
+      )
+    )
+      throw Error("runner_task_type_unverified");
     const now = this.options.now ?? (() => Date.now());
     let entry = this.journal.load();
     if (
@@ -139,6 +146,11 @@ export class Adapter {
       this.journal.clear();
       return task.id;
     }
+    const type = task.task_type ?? "connectivity_check";
+    if (
+      !(this.runs.supportedTaskTypes ?? ["connectivity_check"]).includes(type)
+    )
+      throw Error("runner_task_type_unverified");
     if (task.runner_scope && task.runner_scope !== this.runs.boundaryId)
       throw Error("runner_scope_requires_reconciliation");
     if (task.state === "cancelled") {
@@ -211,7 +223,7 @@ export class Adapter {
         ? this.runs.get(receipt.run_id, controller.signal)
         : this.runs.create({
             idempotencyKey: receipt.key,
-            prompt: RESPONSE,
+            prompt: taskRequest(type),
             tools: [],
             replay: receipt.replay,
             signal: controller.signal,
@@ -227,12 +239,13 @@ export class Adapter {
       if (lost) throw lost;
       checkStop();
       if (run.state === "running") return task.id;
-      const success = run.state === "succeeded" && run.text === RESPONSE;
+      const result = run.text ? canonicalResult(type, run.text) : undefined;
+      const success = run.state === "succeeded" && result !== undefined;
       await this.hub.complete(this.principal, {
         id: receipt.id,
         fence: receipt.fence,
         state: success ? "succeeded" : "failed",
-        result: success ? RESPONSE : "connectivity_check_failed",
+        result: success ? result! : taskFailure(type),
       });
       checkStop();
       this.journal.clear();

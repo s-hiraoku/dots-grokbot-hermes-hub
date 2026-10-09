@@ -1,3 +1,5 @@
+import { verifyInventoryUpgrade } from "./inventory-upgrade.js";
+import { inventorySuite } from "./inventory-suite.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -24,9 +26,9 @@ const options = (path) =>
     d1Databases: { DB: "local-hub-fixture" },
     outboundService: () => new Response(null, { status: 403 }),
   });
-async function migrate(db) {
+async function migrate(db, before = "9999") {
   for (const name of readdirSync("drizzle")
-    .filter((n) => n.endsWith(".sql"))
+    .filter((n) => n.endsWith(".sql") && n < before)
     .sort()) {
     const statements = readFileSync(`drizzle/${name}`, "utf8")
       .split("--> statement-breakpoint")
@@ -255,5 +257,27 @@ test("local D1 emulator restart preserves the committed global stop and audit", 
   } finally {
     await mf.dispose();
     rmSync(dir, { recursive: true });
+  }
+});
+
+test("local D1 inventory task contract", async (t) => {
+  const mf = new Miniflare(options("dist/worker.js"));
+  try {
+    const db = await mf.getD1Database("DB");
+    await migrate(db);
+    await inventorySuite(t, new D1Hub(db));
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test("D1 legacy upgrade preserves task/notification/stop data and triggers, with transactional rollback", async () => {
+  const mf = new Miniflare(options("dist/worker.js"));
+  try {
+    const db = await mf.getD1Database("DB");
+    await migrate(db, "0006");
+    await verifyInventoryUpgrade(new D1Hub(db).driver);
+  } finally {
+    await mf.dispose();
   }
 });

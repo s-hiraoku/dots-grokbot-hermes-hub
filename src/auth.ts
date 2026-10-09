@@ -17,6 +17,11 @@ const policySchema = z
       .object({
         subject: z.string().min(1).max(200),
         kind: z.enum(["user", "service"]),
+        taskTypes: z
+          .array(z.enum(["connectivity_check", "shift_log_inventory"]))
+          .min(1)
+          .max(2)
+          .optional(),
         clientId: z.string().min(1).max(200).optional(),
         operations: z.array(operation).min(1),
         destination: z.literal("hermes").optional(),
@@ -185,6 +190,7 @@ export class PinnedJWTVerifier {
       // Subject-specific static policy, never claims.agent/reader/role or caller headers.
       return Object.freeze({
         subject: p.subject,
+        ...(p.taskTypes ? { taskTypes: Object.freeze([...p.taskTypes]) } : {}),
         ...(p.clientId ? { clientId: p.clientId } : {}),
         operations: Object.freeze(operations),
         ...(p.destination ? { destination: p.destination } : {}),

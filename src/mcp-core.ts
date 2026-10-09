@@ -1,3 +1,4 @@
+import { taskTypes, canonicalResult } from "./task-contract.ts";
 import {
   McpServer,
   ProtocolError,
@@ -18,7 +19,7 @@ const id = z.string().uuid(),
 export const schemas = {
   submit: z
     .object({
-      task_type: z.literal("connectivity_check"),
+      task_type: z.enum(taskTypes),
       request_key: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
     })
     .strict(),
@@ -37,10 +38,17 @@ export const schemas = {
       id,
       fence,
       state: z.enum(["succeeded", "failed"]),
-      result: z.enum([
-        "Agent Hub connectivity check completed.",
-        "connectivity_check_failed",
-      ]),
+      result: z
+        .string()
+        .max(4096)
+        .refine(
+          (value) =>
+            value === "connectivity_check_failed" ||
+            value === "shift_log_inventory_failed" ||
+            taskTypes.some(
+              (type) => canonicalResult(type, value) !== undefined,
+            ),
+        ),
     })
     .strict(),
 };

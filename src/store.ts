@@ -1,6 +1,6 @@
+import { taskTypes, canonicalResult, taskFailure } from "./task-contract.ts";
 import { DurableAuthorization } from "./authorization.ts";
 import {
-  RESPONSE,
   type Runs,
   type Driver,
   type Principal,
@@ -58,7 +58,10 @@ export class TaskService {
     this.principal(p, "submit");
     p = await this.authorization.bind(p);
     if (
-      a.task_type !== "connectivity_check" ||
+      !taskTypes.some((type) => type === a.task_type) ||
+      !(p.taskTypes ?? ["connectivity_check"]).some(
+        (type) => type === a.task_type,
+      ) ||
       !/^[a-zA-Z0-9_-]{1,80}$/.test(a.request_key) ||
       p.destination !== "hermes" ||
       Object.keys(a).some((k) => !["task_type", "request_key"].includes(k))
@@ -77,11 +80,12 @@ export class TaskService {
       throw new Error("invalid_grant_policy");
     const r = await this.authorization.batch(p, [
       stmt(
-        `INSERT OR IGNORE INTO tasks(id,owner,destination,request_key,state,actor,at,mutation) VALUES(?,?,?,?,'queued',?,${clock},?)`,
+        `INSERT OR IGNORE INTO tasks(id,owner,destination,request_key,task_type,state,actor,at,mutation) VALUES(?,?,?,?,?,'queued',?,${clock},?)`,
         crypto.randomUUID(),
         p.subject,
         p.destination,
         a.request_key,
+        a.task_type,
         p.subject,
         mutation,
       ),
@@ -103,7 +107,10 @@ export class TaskService {
         a.request_key,
       ),
     ]);
-    return this.row(r[r.length - 1]);
+    const task = this.row(r[r.length - 1]);
+    if (task.task_type !== a.task_type)
+      throw Error("idempotency_task_type_conflict");
+    return task;
   }
   async claim(p: Principal, a: Record<string, never> = {}) {
     this.principal(p, "claim");
@@ -120,13 +127,16 @@ export class TaskService {
         p.worker,
       ),
       stmt(
-        `UPDATE tasks SET state='running',execution_open=1,fence=fence+1,lease=${clock}+?,runner_scope=?,runner_subject=?,actor=?,at=${clock},mutation=? WHERE id=(SELECT id FROM tasks WHERE destination=? AND state='queued' ORDER BY at,rowid LIMIT 1) AND NOT EXISTS(SELECT 1 FROM tasks WHERE destination=? AND execution_open=1)`,
+        `UPDATE tasks SET state='running',execution_open=1,fence=fence+1,lease=${clock}+?,runner_scope=?,runner_subject=?,actor=?,at=${clock},mutation=? WHERE id=(SELECT id FROM tasks WHERE destination=? AND task_type IN (?,?) AND state='queued' ORDER BY at,rowid LIMIT 1) AND NOT EXISTS(SELECT 1 FROM tasks WHERE destination=? AND execution_open=1)`,
         this.leaseMs,
         p.runnerScope ?? null,
         p.subject,
         p.subject,
         mutation,
         p.worker,
+        (p.taskTypes ?? ["connectivity_check"])[0],
+        (p.taskTypes ?? ["connectivity_check"])[1] ??
+          (p.taskTypes ?? ["connectivity_check"])[0],
         p.worker,
       ),
       stmt("SELECT * FROM tasks WHERE mutation=?", mutation),
@@ -163,13 +173,29 @@ export class TaskService {
   ) {
     this.principal(p, "complete");
     p = await this.authorization.bind(p);
-    if (
-      !["succeeded", "failed"].includes(a.state) ||
-      (a.state === "succeeded"
-        ? a.result !== RESPONSE
-        : a.result !== "connectivity_check_failed")
-    )
-      throw new Error("invalid_result");
+    const task = this.row(
+      (
+        await this.authorization.batch(p, [
+          stmt(
+            "SELECT * FROM tasks WHERE id=? AND destination=? AND runner_subject=? AND runner_scope IS ?",
+            a.id,
+            p.worker ?? "",
+            p.subject,
+            p.runnerScope ?? null,
+          ),
+        ])
+      )[0],
+    );
+    const type = task.task_type ?? "connectivity_check";
+    const result =
+      a.state === "succeeded"
+        ? canonicalResult(type, a.result)
+        : a.result === taskFailure(type)
+          ? a.result
+          : undefined;
+    if (!["succeeded", "failed"].includes(a.state) || result === undefined)
+      throw Error("invalid_result");
+    a = { ...a, result };
     const clock = this.driver.nowSQL;
     const r = await this.authorization.batch(p, [
       stmt(
@@ -285,7 +311,9 @@ export class TaskService {
     if (
       run.id !== task.run_id ||
       run.state !== "succeeded" ||
-      run.text !== RESPONSE ||
+      !run.text ||
+      canonicalResult(task.task_type ?? "connectivity_check", run.text) ===
+        undefined ||
       !runs.toolIsolationVerified ||
       !runs.durableIdempotency
     )
@@ -294,11 +322,21 @@ export class TaskService {
       ...a,
       run_id: task.run_id,
       runner_scope: task.runner_scope,
+      result: canonicalResult(
+        task.task_type ?? "connectivity_check",
+        run.text,
+      )!,
     });
   }
   private async commitReconciliation(
     p: Principal,
-    a: { id: string; fence: number; run_id: string; runner_scope: string },
+    a: {
+      id: string;
+      fence: number;
+      run_id: string;
+      runner_scope: string;
+      result: string;
+    },
   ) {
     this.principal(p, "reconcile");
     p = await this.authorization.bind(p);
@@ -307,7 +345,7 @@ export class TaskService {
     const r = await this.authorization.batch(p, [
       stmt(
         `UPDATE tasks SET state=CASE WHEN state='cancelled' THEN state ELSE 'succeeded' END,result=CASE WHEN state='cancelled' THEN result ELSE ? END,execution_open=0,lease=NULL,fence=fence+1,actor=?,at=${clock},mutation=? WHERE id=? AND execution_open=1 AND fence=? AND run_id=? AND runner_scope=? AND (state IN ('waiting_approval','cancelled') OR (state='running' AND lease<=${clock}))`,
-        RESPONSE,
+        a.result,
         p.subject,
         mutation,
         a.id,

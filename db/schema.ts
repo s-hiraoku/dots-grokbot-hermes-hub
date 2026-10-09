@@ -38,7 +38,10 @@ export const tasks = sqliteTable(
       "valid_state",
       sql`${t.state} IN ('queued','running','waiting_approval','succeeded','failed','cancelled')`,
     ),
-    check("fixed_task_type", sql`${t.task_type}='connectivity_check'`),
+    check(
+      "fixed_task_type",
+      sql`${t.task_type} IN ('connectivity_check','shift_log_inventory')`,
+    ),
     check("valid_gate", sql`${t.execution_open} IN (0,1)`),
   ],
 );

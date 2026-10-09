@@ -18,11 +18,23 @@ function httpsURL(value: string) {
 }
 /** Operator-selected Auth0 tenant only; never discovery from a JWT or caller URL. */
 export class OAuthResource {
+  readonly userScopes: readonly (typeof scopes)[number][];
   readonly issuer: string;
   readonly resource: string;
   readonly metadataURL: string;
   readonly jwksURL: string;
-  constructor(options: { issuer: string; resource: string }) {
+  constructor(options: {
+    issuer: string;
+    resource: string;
+    userScopes?: readonly (typeof scopes)[number][];
+  }) {
+    this.userScopes = Object.freeze(
+      z
+        .array(z.enum(scopes))
+        .min(1)
+        .max(4)
+        .parse(options.userScopes ?? [...scopes]),
+    );
     const issuer = httpsURL(options.issuer);
     const resource = httpsURL(options.resource);
     if (
@@ -43,12 +55,12 @@ export class OAuthResource {
     return {
       resource: this.resource,
       authorization_servers: [this.issuer],
-      scopes_supported: [...scopes],
+      scopes_supported: [...this.userScopes],
       bearer_methods_supported: ["header"],
     };
   }
   challenge() {
-    return `Bearer resource_metadata="${this.metadataURL}", scope="${scopes.join(" ")}"`;
+    return `Bearer resource_metadata="${this.metadataURL}", scope="${this.userScopes.join(" ")}"`;
   }
   response(path: string, method: string): Response | undefined {
     if (
@@ -75,6 +87,11 @@ const approval = z
   .object({
     subject: z.string().min(1).max(200),
     kind: z.enum(["user", "service"]),
+    taskTypes: z
+      .array(z.enum(["connectivity_check", "shift_log_inventory"]))
+      .min(1)
+      .max(2)
+      .optional(),
     clientId: z.string().min(1).max(200),
     operations: z
       .array(

@@ -43,6 +43,13 @@
       "when": 1791505909082,
       "tag": "0005_durable_authorization",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791587560026,
+      "tag": "0006_shift_log_inventory",
+      "breakpoints": true
     }
   ]
 }
