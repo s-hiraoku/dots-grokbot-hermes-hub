@@ -39,3 +39,31 @@ Legacy task ownership is subject-based and intentionally not migrated here. The 
 `TokenBroker` requires one shared account ledger, a confirmed explicit billing interval/ceiling, an authenticated service principal with client binding, and an operator-supplied acquisition function. It is not wired to a live transport or server. Tokens stay in memory and are never written to the ledger. Reopening loses the cache and uses another reserved acquisition only if the prior attempt finished; an unfinished attempt stays parked. Multiple process instances serialize acquisition through the shared database; they do not share token memory, so a second process may consume another quota unit after the first finishes. Prefer one broker process. No other consumer may bypass that ledger; provider account usage must be reconciled before configuration, with a lower local ceiling if needed. Overlapping differently named billing periods are rejected. Creating a future period is an operator action, not automatic calendar-month reset.
 
 Every cache use checks durable authorization. Stop during acquisition fences its acknowledgement and leaves the attempt parked. Global epoch changes invalidate cached tokens. Network wait is bounded and abort-signaled, but abort cannot retract an issuance already sent; the reserved count remains. Failed attempts require explicit reviewed reconciliation, not an automatic unlock. The local notification callback reports generic reasons; external notifications and dashboard reconciliation remain unconnected. Actual OAuth credentials, token endpoint, entitlement confirmation, and provider billing boundary remain approval gates.
+
+## Fixed-text runtime connection increment
+
+The Node entrypoint now supports an explicit private Auth0 policy through
+`HAB_RUNTIME_CONFIG`; its default remains deny-all and no live config is installed.
+The operator-selected HTTPS port/path controls audience, metadata and MCP routing,
+with exact Host/Origin checks. Optional enrolled-peer ping is wired without a wake
+transport. A fixed-loopback modern MCP worker transport connects the existing
+adapter to Hub tools; tests prove submit/mock Runs/get and acknowledgement recovery.
+The legacy SDK client remains unchanged. Runtime config currently rejects inventory,
+Events and operator operations, so this increment does not activate the prepared
+inventory runner. Details and dummy configuration are in [Auth0 boundary](auth0-boundary.md).
+
+Current Mac observation for this increment: the dedicated inventory profile exists;
+its final private manifest is absent. Loopback probes returned execution-environment
+EPERM, so no listener or live API was confirmed and no elevated retry was attempted.
+No API key was read/generated, no installed Hermes process was started, and no model
+call occurred. Owner-reported six-root preflight is prior evidence, not a fresh scan.
+
+Hermes's next technical step is a final independently reviewed Inspector policy /
+private manifest plus ephemeral-key launcher/adapter binding. The runtime must be
+able to perform its ordinary permitted socket operations; the existing EPERM must
+be resolved by the owner/execution environment. Confirm the included
+`openai-codex / gpt-6.1-sol` allowance entails $0 additional model charges before
+calling it. Existing preparation approvals need not be repeated. Exact network
+exposure, live OAuth enrollment/credential provisioning and any real invocation
+outside existing approval remain separate gates. Total additional monthly and
+model-test cost stays $0; no paid path or fallback is introduced.

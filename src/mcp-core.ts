@@ -178,7 +178,9 @@ export async function fetchMCP(
   ping?: PingService,
 ): Promise<Response> {
   const metadata = oauth?.response(
-    new URL(request.url).pathname,
+    new URL(request.url).pathname +
+      new URL(request.url).search +
+      new URL(request.url).hash,
     request.method,
   );
   if (metadata) return metadata;
@@ -196,7 +198,13 @@ export async function fetchMCP(
         ? { "WWW-Authenticate": oauth.challenge(), "Cache-Control": "no-store" }
         : {},
     });
-  if (new URL(request.url).pathname !== "/mcp" || request.method !== "POST")
+  const target = new URL(request.url);
+  if (
+    target.pathname !== (oauth?.mcpPath ?? "/mcp") ||
+    target.search ||
+    target.hash ||
+    request.method !== "POST"
+  )
     return new Response(null, { status: 405 });
   return createMcpHandler(() => createMCP(hub, p, events, ping)).fetch(request);
 }

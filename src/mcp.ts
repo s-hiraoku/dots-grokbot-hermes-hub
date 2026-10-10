@@ -17,8 +17,7 @@ export function handler(
   ping?: PingService,
 ) {
   return async (req: IncomingMessage, res: ServerResponse) => {
-    const path = new URL(req.url ?? "/", "http://localhost").pathname;
-    const metadata = oauth?.response(path, req.method ?? "");
+    const metadata = oauth?.response(req.url ?? "/", req.method ?? "");
     if (metadata) {
       res.writeHead(metadata.status, Object.fromEntries(metadata.headers));
       res.end(await metadata.text());
@@ -44,7 +43,7 @@ export function handler(
       res.end();
       return;
     }
-    if (req.url !== "/mcp" || req.method !== "POST") {
+    if (req.url !== (oauth?.mcpPath ?? "/mcp") || req.method !== "POST") {
       res.writeHead(405);
       res.end();
       return;
