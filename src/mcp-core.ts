@@ -1,3 +1,5 @@
+import { pingSchemas, type PingService } from "./ping.ts";
+import { taskTypes, canonicalResult } from "./task-contract.ts";
 import {
   McpServer,
   ProtocolError,
@@ -18,7 +20,7 @@ const id = z.string().uuid(),
 export const schemas = {
   submit: z
     .object({
-      task_type: z.literal("connectivity_check"),
+      task_type: z.enum(taskTypes),
       request_key: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
     })
     .strict(),
@@ -37,14 +39,26 @@ export const schemas = {
       id,
       fence,
       state: z.enum(["succeeded", "failed"]),
-      result: z.enum([
-        "Agent Hub connectivity check completed.",
-        "connectivity_check_failed",
-      ]),
+      result: z
+        .string()
+        .max(4096)
+        .refine(
+          (value) =>
+            value === "connectivity_check_failed" ||
+            value === "shift_log_inventory_failed" ||
+            taskTypes.some(
+              (type) => canonicalResult(type, value) !== undefined,
+            ),
+        ),
     })
     .strict(),
 };
-export function createMCP(hub: TaskService, p: Principal, events?: EventAPI) {
+export function createMCP(
+  hub: TaskService,
+  p: Principal,
+  events?: EventAPI,
+  ping?: PingService,
+) {
   const server = new McpServer({ name: "agent-hub", version: "0.2.0" });
   const invoke = async (name: string, args: unknown) => {
     switch (name) {
@@ -88,6 +102,39 @@ export function createMCP(hub: TaskService, p: Principal, events?: EventAPI) {
         }
       },
     );
+  if (ping) {
+    for (const [name, schema] of Object.entries(pingSchemas)) {
+      server.registerTool(
+        name,
+        {
+          description: "Fixed diagnostic ping/pong only",
+          inputSchema: schema,
+          _meta: {
+            securitySchemes: [{ type: "oauth2", scopes: [`hub:${name}`] }],
+          },
+        },
+        async (args: unknown) => {
+          try {
+            const method = {
+              ping_submit: "submit",
+              ping_get: "get",
+              ping_reply: "reply",
+              ping_pending: "pending",
+            }[name] as "submit" | "get" | "reply" | "pending";
+            const value = await ping[method](p, args);
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(value) }],
+            };
+          } catch {
+            return {
+              isError: true,
+              content: [{ type: "text" as const, text: "Operation rejected" }],
+            };
+          }
+        },
+      );
+    }
+  }
   if (events) {
     const eventCall = async (
       work: () => Promise<unknown>,
@@ -128,13 +175,20 @@ export async function fetchMCP(
   authenticate: (req: Request) => Promise<Principal | null> = async () => null,
   events?: EventAPI,
   oauth?: OAuthResource,
+  ping?: PingService,
 ): Promise<Response> {
   const metadata = oauth?.response(
     new URL(request.url).pathname,
     request.method,
   );
   if (metadata) return metadata;
-  const p = await authenticate(request);
+  let p: Principal | null = null;
+  try {
+    const verified = await authenticate(request);
+    if (verified) p = await hub.authorization.bind(verified);
+  } catch {
+    /* Authentication or authoritative DB failure denies admission. */
+  }
   if (!p)
     return new Response(null, {
       status: 401,
@@ -144,5 +198,5 @@ export async function fetchMCP(
     });
   if (new URL(request.url).pathname !== "/mcp" || request.method !== "POST")
     return new Response(null, { status: 405 });
-  return createMcpHandler(() => createMCP(hub, p, events)).fetch(request);
+  return createMcpHandler(() => createMCP(hub, p, events, ping)).fetch(request);
 }

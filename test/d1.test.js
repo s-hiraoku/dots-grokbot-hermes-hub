@@ -1,3 +1,6 @@
+import { pingSuite } from "./ping-suite.js";
+import { verifyInventoryUpgrade } from "./inventory-upgrade.js";
+import { inventorySuite } from "./inventory-suite.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -12,6 +15,7 @@ import { Adapter, MockRuns } from "../src/adapter.ts";
 import { MCPHubClient } from "../src/client.ts";
 import { owner, worker, submit, journal, finish } from "./fixtures.js";
 import { SecretVault, SubscriptionService } from "../src/subscriptions.ts";
+import { authorizationSuite } from "./authorization-suite.js";
 import { storeSuite } from "./store-suite.js";
 const options = (path) =>
   convertV4MiniflareOptions({
@@ -23,9 +27,9 @@ const options = (path) =>
     d1Databases: { DB: "local-hub-fixture" },
     outboundService: () => new Response(null, { status: 403 }),
   });
-async function migrate(db) {
+async function migrate(db, before = "9999") {
   for (const name of readdirSync("drizzle")
-    .filter((n) => n.endsWith(".sql"))
+    .filter((n) => n.endsWith(".sql") && n < before)
     .sort()) {
     const statements = readFileSync(`drizzle/${name}`, "utf8")
       .split("--> statement-breakpoint")
@@ -170,6 +174,25 @@ test("local Worker D1 contract, concurrent calls and HTTP adapter roundtrip", as
     await mf.dispose();
   }
 });
+test("D1 durable authorization contract and cross-instance stop persistence", async (t) => {
+  const mf = new Miniflare(options("dist/worker.js"));
+  try {
+    const db = await mf.getD1Database("DB");
+    await migrate(db);
+    const h = new D1Hub(db);
+    await authorizationSuite(t, h);
+    // The last contract test removes the global row deliberately; restore only the fixture.
+    await db
+      .prepare("INSERT INTO authorization_state VALUES('global','*',1,10)")
+      .run();
+    assert.equal(
+      await new D1Hub(db).authorization.isActive(owner.subject),
+      false,
+    );
+  } finally {
+    await mf.dispose();
+  }
+});
 test("production Worker denies forged headers by default", async () => {
   const mf = new Miniflare(options("dist/worker.js"));
   try {
@@ -198,5 +221,124 @@ test("local D1 persists task state after emulator restart", async () => {
   } finally {
     await mf.dispose();
     rmSync(dir, { recursive: true });
+  }
+});
+
+test("local D1 emulator restart preserves the committed global stop and audit", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "hub-d1-stop-fixture-"));
+  const config = { ...options("dist/worker.js"), resourcePersistencePath: dir };
+  let mf = new Miniflare(config);
+  try {
+    let db = await mf.getD1Database("DB");
+    await migrate(db);
+    const h = new D1Hub(db);
+    const task = await submit(h, "d1-stop-restart");
+    await h.authorization.setStopped(
+      { kind: "global", id: "*" },
+      true,
+      0,
+      "fixture-maintainer",
+    );
+    await mf.dispose();
+    mf = new Miniflare(config);
+    db = await mf.getD1Database("DB");
+    const reopened = new D1Hub(db);
+    await assert.rejects(reopened.get(owner, task), /authorization_rejected/);
+    const rows = await reopened.driver.batch([
+      {
+        sql: "SELECT stopped,epoch FROM authorization_state WHERE kind='global'",
+      },
+      { sql: "SELECT actor FROM authorization_audit" },
+      { sql: "SELECT state FROM tasks WHERE id=?", params: [task.id] },
+    ]);
+    assert.equal(rows[0][0].stopped, 1);
+    assert.equal(rows[0][0].epoch, 1);
+    assert.equal(rows[1][0].actor, "fixture-maintainer");
+    assert.equal(rows[2][0].state, "queued");
+  } finally {
+    await mf.dispose();
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test("local D1 inventory task contract", async (t) => {
+  const mf = new Miniflare(options("dist/worker.js"));
+  try {
+    const db = await mf.getD1Database("DB");
+    await migrate(db);
+    await inventorySuite(t, new D1Hub(db));
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test("D1 legacy upgrade preserves task/notification/stop data and triggers, with transactional rollback", async () => {
+  const mf = new Miniflare(options("dist/worker.js"));
+  try {
+    const db = await mf.getD1Database("DB");
+    await migrate(db, "0006");
+    await verifyInventoryUpgrade(new D1Hub(db).driver);
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test("D1 fixed bidirectional diagnostic contract", async (t) => {
+  const mf = new Miniflare(options("dist/worker.js"));
+  try {
+    const db = await mf.getD1Database("DB");
+    await migrate(db);
+    await pingSuite(t, new D1Hub(db));
+  } finally {
+    await mf.dispose();
+  }
+});
+test("D1 token broker atomic account budget fences competing instances", async () => {
+  const { TokenBroker } = await import("../src/token-broker.ts");
+  const mf = new Miniflare(options("dist/worker.js"));
+  try {
+    const db = await mf.getD1Database("DB");
+    await migrate(db);
+    const h = new D1Hub(db);
+    let calls = 0;
+    const p = {
+        subject: "fixture-service",
+        clientId: "fixture-client",
+        operations: [],
+      },
+      period = { id: "fixture-month", start: 0, end: 10000000, ceiling: 1 };
+    const acquire = async () => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 20));
+      return { access_token: "fixture-token", expires_in: 60 };
+    };
+    const brokers = [
+      new TokenBroker(
+        h.authorization,
+        p,
+        period,
+        acquire,
+        undefined,
+        () => 1000,
+      ),
+      new TokenBroker(
+        h.authorization,
+        p,
+        period,
+        acquire,
+        undefined,
+        () => 1000,
+      ),
+    ];
+    const results = await Promise.allSettled(brokers.map((b) => b.token()));
+    assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+    assert.equal(calls, 1);
+    assert.equal(
+      (await h.driver.batch([{ sql: "SELECT used FROM token_budget" }]))[0][0]
+        .used,
+      1,
+    );
+  } finally {
+    await mf.dispose();
   }
 });

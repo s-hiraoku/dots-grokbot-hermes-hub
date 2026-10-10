@@ -11,3 +11,7 @@ logs/
 dist/
 .sites-runtime/
 .wrangler/
+
+config/*.local.json
+__pycache__/
+.ruff_cache/

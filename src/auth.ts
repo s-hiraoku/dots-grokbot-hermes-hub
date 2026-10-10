@@ -10,6 +10,10 @@ const operation = z.enum([
   "events",
   "grants",
   "reconcile",
+  "ping_submit",
+  "ping_get",
+  "ping_reply",
+  "ping_pending",
 ]);
 const policySchema = z
   .array(
@@ -17,6 +21,11 @@ const policySchema = z
       .object({
         subject: z.string().min(1).max(200),
         kind: z.enum(["user", "service"]),
+        taskTypes: z
+          .array(z.enum(["connectivity_check", "shift_log_inventory"]))
+          .min(1)
+          .max(2)
+          .optional(),
         clientId: z.string().min(1).max(200).optional(),
         operations: z.array(operation).min(1),
         destination: z.literal("hermes").optional(),
@@ -37,6 +46,50 @@ const policySchema = z
       .strict(),
   )
   .max(100);
+/** One issuer per verifier; duplicate subject entries require distinct explicit clients. */
+export function validatePolicyBindings(
+  policy: readonly {
+    subject: string;
+    clientId?: string;
+    operations: readonly string[];
+    worker?: unknown;
+    runnerScope?: unknown;
+    destination?: unknown;
+    taskTypes?: unknown;
+    resultReaders?: unknown;
+  }[],
+) {
+  const subjects = new Map<string, Set<string | undefined>>();
+  for (const p of policy) {
+    const clients = subjects.get(p.subject) ?? new Set<string | undefined>();
+    if (
+      clients.has(p.clientId) ||
+      (clients.size > 0 && (!p.clientId || clients.has(undefined)))
+    )
+      throw Error("ambiguous_identity_binding");
+    clients.add(p.clientId);
+    subjects.set(p.subject, clients);
+  }
+  // Legacy task ownership is subject-based. Shared-subject clients are diagnostic-only
+  // until task ownership has a separately reviewed client-aware migration.
+  for (const p of policy) {
+    if (
+      (subjects.get(p.subject)?.size ?? 0) > 1 &&
+      (p.worker !== undefined ||
+        p.runnerScope !== undefined ||
+        p.destination !== undefined ||
+        p.taskTypes !== undefined ||
+        p.resultReaders !== undefined ||
+        p.operations.some(
+          (op) =>
+            !["ping_submit", "ping_get", "ping_reply", "ping_pending"].includes(
+              op,
+            ),
+        ))
+    )
+      throw Error("shared_subject_requires_diagnostic_policy");
+  }
+}
 const decode = (s: string) => {
   if (!/^[A-Za-z0-9_-]+$/.test(s)) throw Error("invalid_token");
   return Uint8Array.from(
@@ -56,7 +109,11 @@ export class PinnedJWTVerifier {
   #audience: string;
   #kid: string;
   #key: CryptoKey;
-  #active: (subject: string, kind: "user" | "service") => Promise<boolean>;
+  #active: (
+    subject: string,
+    kind: "user" | "service",
+    clientId?: string,
+  ) => Promise<boolean>;
   #now: () => number;
   constructor(options: {
     issuer: string;
@@ -65,7 +122,11 @@ export class PinnedJWTVerifier {
     key: CryptoKey;
     policy: unknown;
     requireClientId?: boolean;
-    active: (subject: string, kind: "user" | "service") => Promise<boolean>;
+    active: (
+      subject: string,
+      kind: "user" | "service",
+      clientId?: string,
+    ) => Promise<boolean>;
     now?: () => number;
   }) {
     if (
@@ -83,10 +144,7 @@ export class PinnedJWTVerifier {
     this.#policy = policySchema.parse(options.policy);
     if (options.requireClientId && this.#policy.some((p) => !p.clientId))
       throw Error("missing_client_binding");
-    if (
-      new Set(this.#policy.map((p) => p.subject)).size !== this.#policy.length
-    )
-      throw Error("duplicate_subject");
+    validatePolicyBindings(this.#policy);
     for (const p of this.#policy) {
       if (
         p.kind === "user" &&
@@ -167,7 +225,17 @@ export class PinnedJWTVerifier {
         (claims.iat ?? seconds) > seconds
       )
         return null;
-      const p = this.#policy.find((p) => p.subject === claims.sub);
+      if (
+        claims.azp !== undefined &&
+        claims.client_id !== undefined &&
+        claims.azp !== claims.client_id
+      )
+        return null;
+      const clientId = claims.azp ?? claims.client_id;
+      const p = this.#policy.find(
+        (p) =>
+          p.subject === claims.sub && (!p.clientId || p.clientId === clientId),
+      );
       if (
         !p ||
         (p.clientId &&
@@ -175,7 +243,7 @@ export class PinnedJWTVerifier {
             (claims.azp !== undefined && claims.azp !== p.clientId) ||
             (claims.client_id !== undefined &&
               claims.client_id !== p.clientId))) ||
-        !(await this.#active(p.subject, p.kind)) ||
+        !(await this.#active(p.subject, p.kind, p.clientId)) ||
         claims.exp <= Math.floor(this.#now() / 1000)
       )
         return null;
@@ -185,6 +253,8 @@ export class PinnedJWTVerifier {
       // Subject-specific static policy, never claims.agent/reader/role or caller headers.
       return Object.freeze({
         subject: p.subject,
+        ...(p.taskTypes ? { taskTypes: Object.freeze([...p.taskTypes]) } : {}),
+        ...(p.clientId ? { clientId: p.clientId } : {}),
         operations: Object.freeze(operations),
         ...(p.destination ? { destination: p.destination } : {}),
         ...(p.worker ? { worker: p.worker, runnerScope: p.runnerScope } : {}),

@@ -1,3 +1,4 @@
+import type { TaskType } from "./task-contract.ts";
 export const RUN_ID_PATTERN = /^[a-zA-Z0-9_-]{1,124}$/;
 export const RESPONSE = "Agent Hub connectivity check completed.";
 export type State =
@@ -16,9 +17,19 @@ export type Operation =
   | "cancel"
   | "events"
   | "grants"
-  | "reconcile";
+  | "reconcile"
+  | "ping_submit"
+  | "ping_get"
+  | "ping_reply"
+  | "ping_pending";
 export interface Principal {
+  /** Static verified client binding; never a caller argument. */
+  clientId?: string;
+  /** DB epoch captured at the authenticated HTTP boundary. */
+  authorizationEpoch?: number;
   subject: string;
+  /** Approved task allowlist; absent means connectivity only. */
+  taskTypes?: readonly TaskType[];
   operations: readonly Operation[];
   destination?: "hermes";
   worker?: "hermes";
@@ -31,6 +42,7 @@ export interface Lease {
   fence: number;
 }
 export interface Task extends Lease {
+  task_type?: TaskType;
   owner: string;
   destination: string;
   request_key: string;
@@ -61,6 +73,7 @@ export interface Run {
   text?: string;
 }
 export interface Runs {
+  readonly supportedTaskTypes?: readonly TaskType[];
   readonly boundaryId?: string;
   readonly admissionContract?: string;
   readonly toolIsolationVerified: boolean;

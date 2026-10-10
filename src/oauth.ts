@@ -1,8 +1,17 @@
 import { z } from "zod";
-import { PinnedJWTVerifier } from "./auth.ts";
+import { PinnedJWTVerifier, validatePolicyBindings } from "./auth.ts";
 import type { Principal } from "./types.ts";
 
-const scopes = ["hub:submit", "hub:get", "hub:cancel", "hub:events"] as const;
+const scopes = [
+  "hub:submit",
+  "hub:get",
+  "hub:cancel",
+  "hub:events",
+  "hub:ping_submit",
+  "hub:ping_get",
+  "hub:ping_reply",
+  "hub:ping_pending",
+] as const;
 function httpsURL(value: string) {
   const url = new URL(value);
   if (
@@ -18,11 +27,23 @@ function httpsURL(value: string) {
 }
 /** Operator-selected Auth0 tenant only; never discovery from a JWT or caller URL. */
 export class OAuthResource {
+  readonly userScopes: readonly (typeof scopes)[number][];
   readonly issuer: string;
   readonly resource: string;
   readonly metadataURL: string;
   readonly jwksURL: string;
-  constructor(options: { issuer: string; resource: string }) {
+  constructor(options: {
+    issuer: string;
+    resource: string;
+    userScopes?: readonly (typeof scopes)[number][];
+  }) {
+    this.userScopes = Object.freeze(
+      z
+        .array(z.enum(scopes))
+        .min(1)
+        .max(8)
+        .parse(options.userScopes ?? scopes.slice(0, 4)),
+    );
     const issuer = httpsURL(options.issuer);
     const resource = httpsURL(options.resource);
     if (
@@ -43,12 +64,12 @@ export class OAuthResource {
     return {
       resource: this.resource,
       authorization_servers: [this.issuer],
-      scopes_supported: [...scopes],
+      scopes_supported: [...this.userScopes],
       bearer_methods_supported: ["header"],
     };
   }
   challenge() {
-    return `Bearer resource_metadata="${this.metadataURL}", scope="${scopes.join(" ")}"`;
+    return `Bearer resource_metadata="${this.metadataURL}", scope="${this.userScopes.join(" ")}"`;
   }
   response(path: string, method: string): Response | undefined {
     if (
@@ -75,6 +96,11 @@ const approval = z
   .object({
     subject: z.string().min(1).max(200),
     kind: z.enum(["user", "service"]),
+    taskTypes: z
+      .array(z.enum(["connectivity_check", "shift_log_inventory"]))
+      .min(1)
+      .max(2)
+      .optional(),
     clientId: z.string().min(1).max(200),
     operations: z
       .array(
@@ -88,6 +114,10 @@ const approval = z
           "complete",
           "grants",
           "reconcile",
+          "ping_submit",
+          "ping_get",
+          "ping_reply",
+          "ping_pending",
         ]),
       )
       .min(1),
@@ -128,10 +158,7 @@ export class ApprovedSubjects {
     this.#enabled = settings.enabled;
     this.#stopped = new Set(settings.stoppedSubjects ?? []);
     this.#policy = z.array(approval).max(100).parse(policy);
-    if (
-      new Set(this.#policy.map((p) => p.subject)).size !== this.#policy.length
-    )
-      throw Error("duplicate_subject");
+    validatePolicyBindings(this.#policy);
     for (const p of this.#policy) {
       if (
         p.kind === "user" &&
@@ -155,11 +182,16 @@ export class ApprovedSubjects {
   policy() {
     return structuredClone(this.#policy);
   }
-  isActive(subject: string, kind: "user" | "service") {
+  isActive(subject: string, kind: "user" | "service", clientId?: string) {
     return (
       this.#enabled &&
       !this.#stopped.has(subject) &&
-      this.#policy.some((p) => p.subject === subject && p.kind === kind)
+      this.#policy.some(
+        (p) =>
+          p.subject === subject &&
+          p.kind === kind &&
+          (clientId === undefined || p.clientId === clientId),
+      )
     );
   }
   stop(subject: string) {
@@ -305,7 +337,8 @@ export class Auth0Verifier {
         requireClientId: true,
         policy: this.subjects.policy(),
         now: this.#now,
-        active: async (subject, kind) => this.subjects.isActive(subject, kind),
+        active: async (subject, kind, clientId) =>
+          this.subjects.isActive(subject, kind, clientId),
       });
       const principal = await verifier.verify(authorization);
       // Recheck the local stop gate after all asynchronous signature work.
@@ -318,7 +351,8 @@ export class Auth0Verifier {
           .some(
             (p) =>
               p.subject === principal.subject &&
-              this.subjects.isActive(p.subject, p.kind),
+              p.clientId === principal.clientId &&
+              this.subjects.isActive(p.subject, p.kind, p.clientId),
           )
       )
         return null;

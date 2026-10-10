@@ -102,9 +102,10 @@ export class SubscriptionService implements EventAPI {
     this.transportFor = options.transportFor;
     this.identityActive = options.identityActive;
   }
-  private async identity(subject: string, task: string) {
+  private async identity(subject: string, task: string, clientId?: string) {
     return (
       (await this.identityActive(subject)) &&
+      (await this.hub.authorization.isActive(subject, clientId)) &&
       (await this.hub.canNotify(subject, task))
     );
   }
@@ -119,6 +120,7 @@ export class SubscriptionService implements EventAPI {
   }
   async list(p: Principal) {
     this.hub.principal(p, "events");
+    p = await this.hub.authorization.bind(p);
     return {
       events: [
         {
@@ -147,7 +149,13 @@ export class SubscriptionService implements EventAPI {
     )[0][0];
   }
   private async active(row: Row, pending = false) {
-    if (!(await this.identity(String(row.subject), String(row.task))))
+    if (
+      !(await this.identity(
+        String(row.subject),
+        String(row.task),
+        row.client_id === null ? undefined : String(row.client_id),
+      ))
+    )
       return false;
     const clock = this.hub.driver.nowSQL;
     const rows = await this.hub.driver.batch([
@@ -161,6 +169,7 @@ export class SubscriptionService implements EventAPI {
   }
   async subscribe(p: Principal, args: unknown) {
     this.hub.principal(p, "events");
+    p = await this.hub.authorization.bind(p);
     const a = subscribeArguments.parse(args);
     const url = new URL(a.delivery.url);
     if (
@@ -172,7 +181,7 @@ export class SubscriptionService implements EventAPI {
       Buffer.from(a.delivery.secret.slice(6), "base64").length > 64
     )
       throw Error("invalid_callback");
-    if (!(await this.identity(p.subject, a.arguments.task_id)))
+    if (!(await this.identity(p.subject, a.arguments.task_id, p.clientId)))
       throw Error("forbidden");
     const transport = this.transportFor(a.delivery.url); // Operator-owned exact URL allowlist, DNS pinning in transport.
     const id = await this.identifier(
@@ -189,13 +198,14 @@ export class SubscriptionService implements EventAPI {
             aad(previousRow),
           )
         : undefined;
-    const rows = await this.hub.driver.batch([
+    const rows = await this.hub.authorization.batch(p, [
       statement(
-        `INSERT INTO subscriptions(id,subject,task,url,secret_ref,revision,expires,active,verified_until,at) VALUES(?,?,?,?, '',1,${clock}+?,0,0,${clock}) ON CONFLICT(id) DO UPDATE SET revision=revision+1,secret_ref='',previous_secret_ref=NULL,rotation_until=0,expires=${clock}+?,active=0,verified_until=0,at=${clock} WHERE subscriptions.revision=? RETURNING *`,
+        `INSERT INTO subscriptions(id,subject,task,url,client_id,secret_ref,revision,expires,active,verified_until,at) VALUES(?,?,?,?,?, '',1,${clock}+?,0,0,${clock}) ON CONFLICT(id) DO UPDATE SET client_id=excluded.client_id,revision=revision+1,secret_ref='',previous_secret_ref=NULL,rotation_until=0,expires=${clock}+?,active=0,verified_until=0,at=${clock} WHERE subscriptions.revision=? RETURNING *`,
         id,
         p.subject,
         a.arguments.task_id,
         a.delivery.url,
+        p.clientId ?? null,
         a.ttlMs ?? 3600000,
         a.ttlMs ?? 3600000,
         previousRow ? Number(previousRow.revision) : -1,
@@ -225,7 +235,7 @@ export class SubscriptionService implements EventAPI {
       : retainedPrevious
         ? Number(previousRow.rotation_until)
         : 0;
-    await this.hub.driver.batch([
+    await this.hub.authorization.batch(p, [
       statement(
         "UPDATE subscriptions SET secret_ref=?,previous_secret_ref=?,rotation_until=? WHERE id=? AND revision=?",
         secret,
@@ -262,7 +272,7 @@ export class SubscriptionService implements EventAPI {
       );
     }
     if (!(await this.active(row, true))) throw Error("subscription_changed");
-    const result = await this.hub.driver.batch([
+    const result = await this.hub.authorization.batch(p, [
       statement(
         `UPDATE subscriptions SET active=1,verified_until=MIN(expires,?) WHERE id=? AND revision=? AND expires>${clock} AND EXISTS(SELECT 1 FROM tasks WHERE id=subscriptions.task AND (owner=subscriptions.subject OR EXISTS(SELECT 1 FROM task_access g WHERE g.task=tasks.id AND g.subject=subscriptions.subject AND g.notify=1))) RETURNING id,expires`,
         cached ? Number(previousRow.verified_until) : this.hub.now() + 300000,
@@ -280,13 +290,14 @@ export class SubscriptionService implements EventAPI {
   }
   async unsubscribe(p: Principal, args: unknown) {
     this.hub.principal(p, "events");
+    p = await this.hub.authorization.bind(p);
     const a = unsubscribeArguments.parse(args);
     const id = await this.identifier(
       p.subject,
       a.arguments.task_id,
       a.delivery.url,
     );
-    await this.hub.driver.batch([
+    await this.hub.authorization.batch(p, [
       statement(
         "UPDATE subscriptions SET active=0,revision=revision+1 WHERE id=? AND subject=?",
         id,

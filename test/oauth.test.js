@@ -26,7 +26,7 @@ const policy = [
   },
 ];
 const enc = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
-async function fixture() {
+async function fixture(entries = policy) {
   let now = 2000000;
   const keys = [];
   for (const kid of ["old", "new"]) {
@@ -51,7 +51,7 @@ async function fixture() {
       },
     });
   }
-  const subjects = new ApprovedSubjects(policy, { enabled: true });
+  const subjects = new ApprovedSubjects(entries, { enabled: true });
   const calls = [];
   let response = () => Response.json({ keys: [keys[0].jwk] });
   const verifier = new Auth0Verifier({
@@ -445,4 +445,91 @@ test("authenticated MCP fixed submit/mock/get roundtrip and immediate stop deny 
   } finally {
     h.close();
   }
+});
+
+test("Auth0 same human different clients isolates scopes and subject-wide stop", async () => {
+  const entries = [
+    { ...policy[0], operations: ["ping_submit", "ping_get"] },
+    {
+      ...policy[0],
+      clientId: "fixture-grok",
+      operations: ["ping_reply", "ping_pending"],
+    },
+  ];
+  for (const p of entries) delete p.destination;
+  const f = await fixture(entries);
+  const scope = "hub:ping_submit hub:ping_get hub:ping_reply hub:ping_pending";
+  for (const [azp, expected] of [
+    ["fixture-chatgpt", ["ping_submit", "ping_get"]],
+    ["fixture-grok", ["ping_reply", "ping_pending"]],
+  ]) {
+    const p = await f.verifier.verify(await f.sign({ azp, scope }));
+    assert.deepEqual(p.operations, expected);
+    assert.equal(p.clientId, azp);
+  }
+  assert.equal(
+    await f.verifier.verify(await f.sign({ azp: "unregistered", scope })),
+    null,
+  );
+  assert.equal(
+    await f.verifier.verify(
+      await f.sign({
+        azp: "fixture-chatgpt",
+        client_id: "fixture-grok",
+        scope,
+      }),
+    ),
+    null,
+  );
+  f.subjects.stop("fixture-user");
+  for (const azp of ["fixture-chatgpt", "fixture-grok"])
+    assert.equal(await f.verifier.verify(await f.sign({ azp, scope })), null);
+  assert.throws(
+    () =>
+      new ApprovedSubjects(
+        [{ ...entries[0], clientId: undefined }, entries[1]],
+        { enabled: true },
+      ),
+  );
+});
+
+test("shared-human migration cannot grant subject-owned legacy task permissions", () => {
+  assert.throws(
+    () =>
+      new ApprovedSubjects(
+        [
+          policy[0],
+          { ...policy[0], clientId: "fixture-grok", operations: ["ping_get"] },
+        ],
+        { enabled: true },
+      ),
+    /shared_subject_requires_diagnostic_policy/,
+  );
+});
+
+test("shared-subject diagnostic policy rejects latent worker and task metadata", () => {
+  const a = {
+    subject: "fixture-human",
+    kind: "service",
+    clientId: "dots",
+    operations: ["ping_get"],
+  };
+  for (const extra of [
+    { worker: "hermes", runnerScope: "fixture" },
+    { runnerScope: "fixture" },
+    { destination: "hermes" },
+    { taskTypes: ["connectivity_check"] },
+    { resultReaders: [] },
+  ])
+    assert.throws(
+      () =>
+        new ApprovedSubjects(
+          [
+            { ...a, ...extra },
+            { ...a, clientId: "grok" },
+          ],
+          { enabled: true },
+        ),
+      /shared_subject_requires_diagnostic_policy/,
+    );
 });

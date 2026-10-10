@@ -5,6 +5,7 @@ import {
   uniqueIndex,
   index,
   check,
+  primaryKey,
 } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 export const tasks = sqliteTable(
@@ -37,7 +38,10 @@ export const tasks = sqliteTable(
       "valid_state",
       sql`${t.state} IN ('queued','running','waiting_approval','succeeded','failed','cancelled')`,
     ),
-    check("fixed_task_type", sql`${t.task_type}='connectivity_check'`),
+    check(
+      "fixed_task_type",
+      sql`${t.task_type} IN ('connectivity_check','shift_log_inventory')`,
+    ),
     check("valid_gate", sql`${t.execution_open} IN (0,1)`),
   ],
 );
@@ -81,6 +85,7 @@ export const accessAudit = sqliteTable("access_audit", {
   at: integer().notNull(),
 });
 export const subscriptions = sqliteTable("subscriptions", {
+  client_id: text(),
   id: text().primaryKey(),
   subject: text().notNull(),
   task: text().notNull(),
@@ -113,6 +118,157 @@ export const deliveries = sqliteTable(
     check(
       "delivery_state",
       sql`${t.state} IN ('pending','running','delivered','dead')`,
+    ),
+  ],
+);
+
+export const authorizationState = sqliteTable(
+  "authorization_state",
+  {
+    kind: text().notNull(),
+    target: text().notNull(),
+    stopped: integer().notNull(),
+    epoch: integer().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.kind, t.target] }),
+    check(
+      "authorization_kind",
+      sql`${t.kind} IN ('global','subject','client')`,
+    ),
+    check("authorization_target", sql`length(${t.target}) BETWEEN 1 AND 200`),
+    check("authorization_stopped", sql`${t.stopped} IN (0,1)`),
+    check("authorization_epoch", sql`${t.epoch}>=0`),
+    check("authorization_global", sql`${t.kind}<>'global' OR ${t.target}='*'`),
+  ],
+);
+export const authorizationChecks = sqliteTable(
+  "authorization_checks",
+  {
+    id: integer().primaryKey(),
+    subject: text().notNull(),
+    client: text(),
+    epoch: integer(),
+  },
+  (t) => [check("authorization_check_singleton", sql`${t.id}=1`)],
+);
+export const authorizationControlChecks = sqliteTable(
+  "authorization_control_checks",
+  {
+    id: integer().primaryKey(),
+    epoch: integer().notNull(),
+  },
+  (t) => [check("authorization_control_singleton", sql`${t.id}=1`)],
+);
+export const authorizationAudit = sqliteTable("authorization_audit", {
+  seq: integer().primaryKey({ autoIncrement: true }),
+  kind: text().notNull(),
+  target: text().notNull(),
+  stopped: integer().notNull(),
+  epoch: integer().notNull(),
+  actor: text().notNull(),
+  at: integer().notNull(),
+});
+
+export const diagnosticPings = sqliteTable(
+  "diagnostic_pings",
+  {
+    id: text().primaryKey(),
+    correlation_id: text().notNull(),
+    request_key: text().notNull(),
+    sender_side: text().notNull(),
+    recipient_side: text().notNull(),
+    sender_subject: text().notNull(),
+    sender_client: text().notNull(),
+    recipient_subject: text().notNull(),
+    recipient_client: text().notNull(),
+    state: text().notNull(),
+    created: integer().notNull(),
+    expires: integer().notNull(),
+    authorization_epoch: integer().notNull(),
+    reply_id: text(),
+    replied_at: integer(),
+    actor_subject: text().notNull(),
+    actor_client: text().notNull(),
+    at: integer().notNull(),
+  },
+  (t) => [
+    uniqueIndex("diagnostic_request_key").on(
+      t.sender_subject,
+      t.sender_client,
+      t.request_key,
+    ),
+    uniqueIndex("diagnostic_correlation").on(t.correlation_id),
+    uniqueIndex("diagnostic_reply_id").on(t.reply_id),
+    check(
+      "diagnostic_sides",
+      sql`${t.sender_side} IN ('dots','grok') AND ${t.recipient_side} IN ('dots','grok') AND ${t.sender_side}<>${t.recipient_side}`,
+    ),
+    check(
+      "diagnostic_state",
+      sql`${t.state} IN ('pending','replied','expired')`,
+    ),
+    check(
+      "diagnostic_ttl",
+      sql`${t.expires}-${t.created} BETWEEN 1000 AND 300000`,
+    ),
+    check(
+      "diagnostic_reply",
+      sql`(${t.state}='replied' AND ${t.reply_id} IS NOT NULL AND ${t.replied_at} IS NOT NULL) OR (${t.state}<>'replied' AND ${t.reply_id} IS NULL AND ${t.replied_at} IS NULL)`,
+    ),
+  ],
+);
+export const diagnosticOutbox = sqliteTable(
+  "diagnostic_outbox",
+  {
+    id: text().primaryKey(),
+    request_id: text().notNull(),
+    recipient_side: text().notNull(),
+    kind: text().notNull(),
+    delivery: text().notNull().default("pending"),
+    at: integer().notNull(),
+  },
+  (t) => [
+    uniqueIndex("diagnostic_event").on(t.request_id, t.kind),
+    check(
+      "diagnostic_delivery",
+      sql`${t.delivery} IN ('pending','attempted','accepted','failed','uncertain')`,
+    ),
+    check(
+      "diagnostic_kind",
+      sql`${t.kind} IN ('requested','replied','expired')`,
+    ),
+  ],
+);
+export const diagnosticAudit = sqliteTable("diagnostic_audit", {
+  seq: integer().primaryKey({ autoIncrement: true }),
+  request_id: text().notNull(),
+  actor_subject: text().notNull(),
+  actor_client: text().notNull(),
+  state: text().notNull(),
+  at: integer().notNull(),
+});
+
+export const tokenBudget = sqliteTable(
+  "token_budget",
+  {
+    period: text("period").primaryKey(),
+    start: integer("start").notNull(),
+    end: integer("end").notNull(),
+    ceiling: integer("ceiling").notNull(),
+    used: integer("used").notNull().default(0),
+    state: text("state").notNull(),
+    attempt: text("attempt"),
+  },
+  (t) => [
+    check(
+      "token_budget_limit",
+      sql`${t.ceiling} BETWEEN 1 AND 1000 AND ${t.used} BETWEEN 0 AND ${t.ceiling}`,
+    ),
+    check("token_budget_period", sql`${t.end}>${t.start}`),
+    check(
+      "token_budget_state",
+      sql`${t.state} IN ('open','attempting','parked')`,
     ),
   ],
 );

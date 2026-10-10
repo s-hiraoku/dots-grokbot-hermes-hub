@@ -1,3 +1,4 @@
+import type { PingService } from "./ping.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import type { EventAPI } from "./subscriptions.ts";
@@ -13,6 +14,7 @@ export function handler(
   ) => Promise<Principal | null> = async () => null,
   events?: EventAPI,
   oauth?: OAuthResource,
+  ping?: PingService,
 ) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -22,7 +24,13 @@ export function handler(
       res.end(await metadata.text());
       return;
     }
-    const p = await authenticate(req);
+    let p: Principal | null = null;
+    try {
+      const verified = await authenticate(req);
+      if (verified) p = await hub.authorization.bind(verified);
+    } catch {
+      /* Authentication or authoritative DB failure denies admission. */
+    }
     if (!p) {
       res.writeHead(
         401,
@@ -42,9 +50,8 @@ export function handler(
       return;
     }
     const { toNodeHandler } = await import("@modelcontextprotocol/node");
-    await toNodeHandler(createMcpHandler(() => createMCP(hub, p, events)))(
-      req,
-      res,
-    );
+    await toNodeHandler(
+      createMcpHandler(() => createMCP(hub, p, events, ping)),
+    )(req, res);
   };
 }
