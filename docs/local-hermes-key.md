@@ -85,3 +85,24 @@ purchase, API-key fallback or extra-credit use is authorized. General official
 [authentication](https://learn.chatgpt.com/docs/auth) distinguish included usage
 from API-key billing, but do not prove this account or third-party route's status.
 Do not perform a model call to find out which billing path applies.
+
+### Fixed provider route
+
+The dedicated inventory bridge uses the pinned Hermes Codex resolver with
+`read_only=True`, which performs no token refresh, Codex CLI adoption or auth-store
+write. It requires `source=hermes-auth-store`, `auth_mode=chatgpt` and the exact
+`https://chatgpt.com/backend-api/codex` endpoint, and constructs only the
+`codex_responses` transport. Pool credentials, explicit/environment keys, endpoint
+overrides, app-server transports and extra runtime fields are rejected before
+agent construction. Effective endpoint, transport and absence of a credential pool
+are checked again with the existing runtime guards. Automatic Codex credential
+refresh is disabled for this one-run bridge; expiry requires operator reconciliation.
+
+This follows the pinned Hermes
+[OAuth result](https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/hermes_cli/auth_codex.py)
+and [transport mapping](https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/hermes_cli/runtime_provider.py).
+It does not establish subscription entitlement, account identity, remaining
+allowance or prevention of server-side credit billing. Those live gates still
+apply. No resolver is called by offline tests; synthetic fixtures cover the route.
+Existing measured bridge pins predate this change and cannot be reused for live
+launch without independent review of the changed bridge tree.

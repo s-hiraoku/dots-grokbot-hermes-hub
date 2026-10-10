@@ -102,6 +102,8 @@ class Suite(unittest.TestCase):
                 self.max_tokens = kwargs["max_tokens"]
                 self.run_budget_seconds = kwargs["run_budget_seconds"]
                 self.model, self.provider = kwargs["model"], kwargs["provider"]
+                self.base_url, self.api_mode = kwargs["base_url"], kwargs["api_mode"]
+                self._credential_pool = None
                 self.tools = [{"type": "function", "function": bridge.SCHEMA}]
                 self.valid_tool_names = {bridge.TOOL}
                 self._memory_store = self._memory_manager = self._fallback_model = None
@@ -140,12 +142,20 @@ class Suite(unittest.TestCase):
                 }
 
         self.agent_base = Agent
+        self.runtime = {
+            "provider": bridge.PROVIDER,
+            "base_url": bridge.CODEX_BASE_URL,
+            "api_mode": bridge.API_MODE,
+            "source": bridge.CREDENTIAL_SOURCE,
+            "auth_mode": "chatgpt",
+            "api_key": "synthetic-oauth",
+        }
         self.cls = bridge.make_adapter_class(
             API,
             Agent,
             self.registry,
             lambda *a, **k: None,
-            lambda: {"provider": bridge.PROVIDER},
+            lambda: self.runtime,
             Web,
             self.store,
             workdir=self.temp.name,
@@ -202,7 +212,15 @@ class Suite(unittest.TestCase):
         self.assertTrue(self.run_agent()["failed"])
 
     def test_effective_extra_tool_and_runtime_fail_closed(self):
-        for kind in ("schema", "runtime", "memory", "fallback"):
+        for kind in (
+            "schema",
+            "runtime",
+            "memory",
+            "fallback",
+            "endpoint",
+            "mode",
+            "pool",
+        ):
             agent = self.api._create_agent()
             if kind == "schema":
                 agent.tools.append({"function": {"name": "shell"}})
@@ -212,9 +230,36 @@ class Suite(unittest.TestCase):
                 agent._memory_manager = object()
             if kind == "fallback":
                 agent._fallback_chain = ["other"]
+            if kind == "endpoint":
+                agent.base_url = "https://api.openai.com/v1"
+            if kind == "mode":
+                agent.api_mode = "codex_app_server"
+            if kind == "pool":
+                agent._credential_pool = object()
             with self.assertRaises(ValueError):
                 agent.run_conversation(user_message=bridge.INPUT, task_id="run_x")
         self.assertEqual(self.metadata.call_count, 0)
+
+    def test_one_run_never_refreshes_or_adopts_credentials(self):
+        agent = self.api._create_agent()
+        self.assertFalse(agent._try_refresh_codex_client_credentials())
+        self.assertFalse(agent._try_refresh_codex_client_credentials(force=False))
+
+    def test_unapproved_route_rejected_before_client_constructor(self):
+        approved = self.runtime.copy()
+        with patch.object(self.agent_base, "__init__") as constructor:
+            for field, value in (
+                ("source", "explicit"),
+                ("base_url", "https://api.openai.com/v1"),
+                ("api_mode", "codex_app_server"),
+                ("credential_pool", object()),
+            ):
+                self.runtime = {**approved, field: value}
+                with self.assertRaisesRegex(
+                    ValueError, "inventory_provider_route_rejected"
+                ):
+                    self.api._create_agent()
+            constructor.assert_not_called()
 
     def test_handler_rejects_outside_run(self):
         with self.assertRaises(ValueError):
