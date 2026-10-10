@@ -12,7 +12,7 @@ const scopes = [
   "hub:ping_reply",
   "hub:ping_pending",
 ] as const;
-function httpsURL(value: string) {
+function httpsURL(value: string, allowPort = false) {
   const url = new URL(value);
   if (
     url.protocol !== "https:" ||
@@ -20,10 +20,18 @@ function httpsURL(value: string) {
     url.password ||
     url.search ||
     url.hash ||
-    url.port
+    (!allowPort && url.port)
   )
     throw Error("invalid_oauth_url");
   return url;
+}
+/** Canonical MCP path: no decoding, normalization, query or proxy prefix guessing. */
+export function validMcpPath(path: string) {
+  return (
+    /^\/(?:[A-Za-z0-9_-]+\/)*mcp$/.test(path) &&
+    !path.startsWith("/.well-known/") &&
+    path.length <= 200
+  );
 }
 /** Operator-selected Auth0 tenant only; never discovery from a JWT or caller URL. */
 export class OAuthResource {
@@ -31,6 +39,8 @@ export class OAuthResource {
   readonly issuer: string;
   readonly resource: string;
   readonly metadataURL: string;
+  readonly mcpPath: string;
+  readonly metadataPath: string;
   readonly jwksURL: string;
   constructor(options: {
     issuer: string;
@@ -45,18 +55,20 @@ export class OAuthResource {
         .parse(options.userScopes ?? scopes.slice(0, 4)),
     );
     const issuer = httpsURL(options.issuer);
-    const resource = httpsURL(options.resource);
+    const resource = httpsURL(options.resource, true);
     if (
       issuer.pathname !== "/" ||
       options.issuer !== issuer.href ||
       !/^[a-z0-9-]+(?:\.[a-z0-9-]+)?\.auth0\.com$/.test(issuer.hostname) ||
-      resource.pathname !== "/mcp" ||
+      !validMcpPath(resource.pathname) ||
       options.resource !== resource.href
     )
       throw Error("invalid_oauth_resource");
     this.issuer = options.issuer;
     this.resource = options.resource;
-    this.metadataURL = `${resource.origin}/.well-known/oauth-protected-resource/mcp`;
+    this.mcpPath = resource.pathname;
+    this.metadataPath = `/.well-known/oauth-protected-resource${this.mcpPath}`;
+    this.metadataURL = `${resource.origin}${this.metadataPath}`;
     this.jwksURL = `${issuer.origin}/.well-known/jwks.json`;
     Object.freeze(this);
   }
@@ -74,8 +86,10 @@ export class OAuthResource {
   response(path: string, method: string): Response | undefined {
     if (
       ![
-        "/.well-known/oauth-protected-resource/mcp",
-        "/.well-known/oauth-protected-resource",
+        this.metadataPath,
+        ...(this.mcpPath === "/mcp"
+          ? ["/.well-known/oauth-protected-resource"]
+          : []),
       ].includes(path)
     )
       return;

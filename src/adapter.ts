@@ -151,7 +151,9 @@ export class Adapter {
       !(this.runs.supportedTaskTypes ?? ["connectivity_check"]).includes(type)
     )
       throw Error("runner_task_type_unverified");
-    if (task.runner_scope && task.runner_scope !== this.runs.boundaryId)
+    if (
+      (task.runner_scope ?? undefined) !== (this.runs.boundaryId ?? undefined)
+    )
       throw Error("runner_scope_requires_reconciliation");
     if (task.state === "cancelled") {
       // Do not send a guessed stop request or clear a receipt before terminal confirmation.

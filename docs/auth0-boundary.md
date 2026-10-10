@@ -1,17 +1,69 @@
 # Auth0 resource-server boundary (offline implementation)
 
 This unit adds resource discovery and Auth0 access-token validation. It does not
-create an Auth0 account, register an OAuth client, issue credentials, enable the
-runnable server, connect a plugin/Tunnel, or perform browser login. The existing
-Node server and Worker still deny every request until an operator explicitly
-provides an authenticator. Only tests opt into fixture authentication.
+create an Auth0 account, register an OAuth client, issue credentials, connect a
+plugin/Tunnel, or perform browser login. The Node entrypoint now composes the
+verifier from an explicitly selected private runtime configuration; absent
+configuration remains deny-all. No live configuration has been installed. The D1
+Worker remains unconnected and deny-all. Tests use only fixture authentication.
+
+## Opt-in Node runtime for the fixed-text MVP
+
+`src/server.ts` loads only the explicit `HAB_RUNTIME_CONFIG` path. The file must
+be owner-private, regular, canonical (no symlink), at most 64 KiB and named
+`*.local.json`. Invalid configuration terminates before listening; missing config
+never selects public/no-auth mode. The listener remains `127.0.0.1:8787`, with
+SQLite at `runtime/hub.db`. No command has been run to start it in this revision.
+
+[Dummy runtime configuration](../config/runtime.example.json) is disabled and
+contains no credentials. A reviewed private copy must use confirmed issuer,
+resource, distinct enrolled subject/client pairs and exact runner scope. Do not
+paste secrets into it. Set `enabled:true` only after the existing connection
+approval and identity checks are fulfilled. The dummy is not evidence of approval.
+Shared-human/client policies remain diagnostic-only; do not enable legacy task
+operations for two clients sharing one subject. Worker service identity remains
+separate from user OAuth and from the local Hermes API Bearer.
+
+The same resource controls audience, MCP path, metadata URL and challenge. A
+candidate `https://hub.example:8443/hab/mcp` is supported in code, **not exposed
+or approved**. Ingress must preserve that exact path and Authorization and route
+its path-specific well-known metadata to this Hub. A prefixed path does not claim
+the shared root metadata route; query/fragment route variants are rejected. No implicit prefix rewrite,
+Host/X-Forwarded discovery, tunnel edit or change to existing `/mcp → 8765` occurs.
+Exact resource authority and `127.0.0.1:8787` are the only allowed Host values;
+a present Origin must match the resource origin. Duplicate Host/Authorization/
+Origin headers deny before auth. Machine requests may omit Origin.
+
+The runtime wires verifier → durable authorization → task tools and optional
+explicit-peer ping. It currently accepts only `connectivity_check`; inventory,
+Events and operator operations are rejected by configuration. Ping routes require
+both enrolled peers and all four diagnostic operations. No Grok receiver, wake
+transport or background dispatcher is started: reciprocal fixed ping/pong uses
+explicit pending/reply polling. Fixed-task results use explicit `get`.
+
+The legacy SDK `MCPHubClient` remains available. `MCPWorkerClient` adds the modern
+stateless transport boundary for the Mac worker: only fixed loopback 8787 and a
+canonical configured MCP path, a trusted in-memory authorization supplier, no
+redirect/discovery/token issuance/retry, bounded body and timeout. It transmits no
+caller Principal/agent labels. Use `runtime.workerEndpoint` with the existing
+`Adapter`, a verified Runs boundary and durable journal. No live credential
+supplier, launcher or daemon has been installed. Unknown admission/ack failures
+preserve gates/receipts for reconciliation; never create a new run to recover an
+uncertain old one.
+
+Socket-free tests execute the configured resource/verifier/SDK chain and the
+adapter's MCP transport with synthetic tokens and MockRuns. They also test
+reciprocal ping, stop gates and lost claim/completion acknowledgements. This is
+code integration, not a successful real Grok/Hermes connection. See [MVP
+acceptance](mvp-acceptance.md) for remaining live gates.
 
 ## Configuration and wiring
 
 Use a reviewed, exact standard Auth0 tenant issuer, including the final slash.
 Custom-domain issuers are deliberately unsupported in this unit. The resource
 identifier must be a canonical HTTPS URL ending in `/mcp`, without credentials,
-port, query or fragment. It is the audience, not an instruction to deploy a
+query or fragment. An explicit HTTPS port and a prefix such as `/hab/mcp` are
+supported; issuer ports remain forbidden. Normalized/dot/encoded paths are rejected. It is the audience, not an instruction to deploy a
 public server. Real resource/Tunnel rewriting compatibility is still untested.
 
 ```ts
@@ -19,15 +71,18 @@ const resource = new OAuthResource({
   issuer: "https://example-tenant.jp.auth0.com/",
   resource: "https://hub.example/mcp",
 });
-const subjects = new ApprovedSubjects([
-  {
-    subject: "auth0|operator-approved-example",
-    kind: "user",
-    clientId: "operator-approved-chatgpt-client",
-    destination: "hermes",
-    operations: ["submit", "get", "cancel", "events"],
-  },
-], { enabled: true, stoppedSubjects: [] });
+const subjects = new ApprovedSubjects(
+  [
+    {
+      subject: "auth0|operator-approved-example",
+      kind: "user",
+      clientId: "operator-approved-chatgpt-client",
+      destination: "hermes",
+      operations: ["submit", "get", "cancel", "events"],
+    },
+  ],
+  { enabled: true, stoppedSubjects: [] },
+);
 const verifier = new Auth0Verifier({ resource, subjects });
 // Node: handler(hub, req => verifier.verify(req.headers.authorization), events, resource)
 // Portable: fetchMCP(hub, req, r => verifier.verify(r.headers.get("authorization") ?? undefined), events, resource)
@@ -111,7 +166,6 @@ Official references:
 - [Auth0 MCP authorization](https://auth0.com/ai/docs/mcp/get-started/authorization-for-your-mcp-server)
 - [Auth0 JWKS](https://auth0.com/docs/secure/tokens/json-web-tokens/json-web-key-sets)
 - [Auth0 token practices](https://auth0.com/docs/secure/tokens/token-best-practices)
-
 
 ## Local durable denial boundary
 

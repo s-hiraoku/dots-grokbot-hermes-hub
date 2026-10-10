@@ -1,12 +1,18 @@
 import { createServer } from "node:http";
 import { mkdirSync } from "node:fs";
 import { Hub } from "./sqlite.ts";
-import { handler } from "./mcp.ts";
+import { createRuntime } from "./runtime.ts";
+import { readRuntimeConfig } from "./runtime-config.ts";
+// Read explicitly selected config before binding. Missing config remains deny-all;
+// an explicitly supplied invalid config terminates instead of silently downgrading.
+const config = process.env.HAB_RUNTIME_CONFIG
+  ? readRuntimeConfig(process.env.HAB_RUNTIME_CONFIG)
+  : undefined;
 mkdirSync("runtime", { recursive: true, mode: 0o700 });
 const hub = new Hub("runtime/hub.db"),
-  handle = handler(hub);
+  runtime = createRuntime(hub, config);
 createServer((req, res) => {
-  void handle(req, res).catch(() => {
+  void runtime.handle(req, res).catch(() => {
     if (!res.headersSent) res.writeHead(500);
     res.end();
   });
