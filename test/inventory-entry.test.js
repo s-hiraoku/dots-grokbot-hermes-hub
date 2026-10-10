@@ -1,0 +1,444 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import process from "node:process";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  chmodSync,
+  realpathSync,
+  rmSync,
+  existsSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
+import { startInventoryEntry } from "../src/inventory-entry.ts";
+import { InventoryChild } from "../src/inventory-factory.ts";
+import { measureCodeTree } from "../src/inventory-inspector.ts";
+import {
+  INVENTORY_ONE_SHOT_KEY,
+  InventoryMCPClient,
+} from "../src/mcp-worker-client.ts";
+const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function fixture() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "hab-entry-")));
+  const profile = join(root, ".hermes/profiles/hub-inventory-once");
+  mkdirSync(join(profile, "empty-workdir"), { recursive: true, mode: 0o700 });
+  writeFileSync(join(profile, "config.yaml"), "fixture-only\n", {
+    mode: 0o600,
+  });
+  const sourceRoot = join(root, "reviewed/source"),
+    guard = join(root, "reviewed/guard"),
+    dependencyRoot = join(root, "reviewed/dependencies");
+  for (const path of [sourceRoot, guard, dependencyRoot])
+    mkdirSync(path, { recursive: true, mode: 0o700 });
+  const wrapperPath = join(guard, "serve_inventory.py");
+  // This is deliberately a Node fixture, not a substituted production bridge.
+  writeFileSync(
+    wrapperPath,
+    readFileSync(new URL("./inventory-child-fixture.js", import.meta.url)),
+    { mode: 0o400 },
+  );
+  for (const path of [sourceRoot, guard, dependencyRoot])
+    chmodSync(path, 0o500);
+  const pythonPath =
+    process.platform === "darwin"
+      ? join(root, "fixture-python")
+      : realpathSync("/usr/bin/true");
+  if (process.platform === "darwin")
+    writeFileSync(pythonPath, "fixture-interpreter\n", { mode: 0o400 });
+  const trees = [
+    { root: sourceRoot },
+    { root: guard },
+    {
+      root: pythonPath,
+      ...(process.platform === "darwin" ? {} : { systemRuntime: true }),
+    },
+    { root: dependencyRoot, fixedDependencies: true },
+  ];
+  for (const tree of trees) {
+    const { root: path, ...options } = tree;
+    tree.sha256 = await measureCodeTree(path, Infinity, options);
+  }
+  const reviewed = {
+    manifestPath: join(profile, "inventory-manifest.json"),
+    endpoint: "http://127.0.0.1:8645/",
+    namespaceLabel: "fixture",
+    profileRoot: profile,
+    sourceRoot,
+    dependencyRoot,
+    pythonIsolation: "isolated-no-site-v1",
+    wrapperPath,
+    pythonPath,
+    codeTrees: trees,
+    pythonSHA256: sha(readFileSync(pythonPath)),
+    wrapperSHA256: sha(readFileSync(wrapperPath)),
+    configSHA256: sha("fixture-only\n"),
+    sourceCommit: "f97608f178d1ffeca59860195ab7da295f7c8e5f",
+    storeRelativePath: "runs_idempotency.db",
+  };
+  const config = {
+    version: 1,
+    mode: "inventory-one-shot",
+    enabled: true,
+    oauth: {
+      issuer: "https://fixture.us.auth0.com/",
+      resource: "https://hub.example/mcp",
+    },
+    requester: {
+      subject: "fixture-requester",
+      clientId: "fixture-user-client",
+    },
+    worker: { subject: "fixture-worker", clientId: "fixture-worker-client" },
+    reviewed,
+  };
+  const pair = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign", "verify"],
+  );
+  const jwk = {
+    ...(await crypto.subtle.exportKey("jwk", pair.publicKey)),
+    kid: "fixture",
+    alg: "RS256",
+    use: "sig",
+  };
+  const enc = (value) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const sign = async (kind = "requester", claims = {}) => {
+    const text = `${enc({ alg: "RS256", kid: "fixture" })}.${enc({ iss: config.oauth.issuer, aud: config.oauth.resource, sub: config[kind].subject, azp: config[kind].clientId, exp: Math.floor(Date.now() / 1000) + 600, scope: kind === "worker" ? "hub:claim hub:get hub:heartbeat hub:complete" : "hub:submit hub:get", ...claims })}`;
+    return `Bearer ${text}.${Buffer.from(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", pair.privateKey, new TextEncoder().encode(text))).toString("base64url")}`;
+  };
+  const state = { launches: 0, entropy: 0 };
+  const dependencies = {
+    fetch: async (url) => {
+      assert.equal(url, "https://fixture.us.auth0.com/.well-known/jwks.json");
+      return Response.json({ keys: [jwk] });
+    },
+    lifetimeMs: 15000,
+    factory: {
+      entropy: () => {
+        state.entropy++;
+        return Buffer.alloc(32, 9);
+      },
+      child: (launch) => {
+        state.launches++;
+        assert.deepEqual(launch.args, ["-I", "-S", wrapperPath]);
+        const startedAt = Math.floor(Date.now() / 1000) * 1000;
+        const child = new InventoryChild({
+          ...launch,
+          executable: process.execPath,
+          args: [
+            "--input-type=module",
+            "--eval",
+            readFileSync(wrapperPath, "utf8"),
+          ],
+        });
+        state.child = child;
+        state.startedAt = startedAt;
+        return child;
+      },
+      // Only OS process observation is synthetic: the child really exists and
+      // listens. Inspector filesystem/hash/scope checks and Runs HTTP are real.
+      probe: async (pid) => ({
+        pid,
+        uid: process.getuid(),
+        startedAt: state.startedAt,
+        command: `${pythonPath} -I -S ${wrapperPath}`,
+        listeners: ["127.0.0.1:8645"],
+        sourceCommit: reviewed.sourceCommit,
+      }),
+    },
+  };
+  return {
+    root,
+    profile,
+    config,
+    sign,
+    dependencies,
+    state,
+    cleanup: () => {
+      for (const path of [sourceRoot, guard, dependencyRoot])
+        chmodSync(path, 0o700);
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+const args = {
+  task_type: "shift_log_inventory",
+  request_key: INVENTORY_ONE_SHOT_KEY,
+};
+const principal = { subject: "unused-local-label", operations: [] };
+const rawCall = async (entry, authorization, name, input) => {
+  const response = await globalThis.fetch(entry.endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: authorization,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "MCP-Protocol-Version": "2026-07-28",
+      "Mcp-Method": "tools/call",
+      "Mcp-Name": name,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name,
+        arguments: input,
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+    }),
+  });
+  const text = await response.text();
+  return { status: response.status, body: text ? JSON.parse(text) : null };
+};
+test(
+  "actual dedicated HTTP entry/auth/factory/child/Runs/result/stop round trip",
+  { timeout: 20000, skip: process.getuid?.() === 0 },
+  async () => {
+    const f = await fixture();
+    let entry;
+    let releaseAck;
+    const ack = new Promise((resolve) => {
+      releaseAck = resolve;
+    });
+    f.dependencies.workerFetch = async (url, init) => {
+      const response = await globalThis.fetch(url, init);
+      if (JSON.parse(init.body).params.name === "complete") await ack;
+      return response;
+    };
+    try {
+      entry = await startInventoryEntry(
+        f.config,
+        { workerAuthorization: () => f.sign("worker") },
+        f.dependencies,
+      );
+      const client = new InventoryMCPClient({
+        endpoint: entry.endpoint,
+        authorization: () => f.sign(),
+      });
+      const task = await client.submit(args);
+      const duplicates = await Promise.all([
+        client.submit(args),
+        client.submit(args),
+      ]);
+      assert.ok(duplicates.every((copy) => copy.id === task.id));
+      let result;
+      for (let i = 0; i < 100; i++) {
+        result = await client.get(principal, { id: task.id });
+        if (result.state === "succeeded") break;
+        await pause(50);
+      }
+      assert.equal(result.state, "succeeded");
+      assert.equal(JSON.parse(result.result).status, "unknown");
+      assert.equal(f.state.child.exited, false);
+      let closed = false;
+      void entry.closed.then(() => {
+        closed = true;
+      });
+      await pause(30);
+      assert.equal(
+        closed,
+        false,
+        "terminal result must wait for worker ACK before stopping",
+      );
+      releaseAck();
+      await entry.closed;
+      assert.equal(f.state.entropy, 1);
+      assert.equal(f.state.launches, 1);
+      assert.equal(f.state.child.exited, true);
+      const db = new DatabaseSync(join(f.profile, "runs_idempotency.db"));
+      assert.equal(
+        db.prepare("SELECT count(*) AS n FROM fixture_runs").get().n,
+        1,
+      );
+      db.close();
+      const record = JSON.parse(
+        readFileSync(join(f.profile, "inventory-key-record.json"), "utf8"),
+      );
+      assert.equal(record.state, "revoked");
+      assert.equal("key" in record, false);
+      await assert.rejects(
+        startInventoryEntry(
+          f.config,
+          { workerAuthorization: () => f.sign("worker") },
+          f.dependencies,
+        ),
+        /reconciliation/,
+      );
+    } finally {
+      releaseAck();
+      if (entry) await entry.close();
+      f.cleanup();
+    }
+  },
+);
+test(
+  "explicit settings and requester scope fail closed before child/key",
+  { timeout: 12000, skip: process.getuid?.() === 0 },
+  async () => {
+    const f = await fixture();
+    let entry;
+    try {
+      for (const input of [
+        undefined,
+        { ...f.config, enabled: false },
+        { ...f.config, mode: "auth0" },
+        { ...f.config, worker: f.config.requester },
+        { ...f.config, extra: true },
+      ])
+        await assert.rejects(
+          startInventoryEntry(
+            input,
+            { workerAuthorization: () => f.sign("worker") },
+            f.dependencies,
+          ),
+          /config_rejected/,
+        );
+      assert.equal(existsSync(join(f.profile, "inventory-hub.sqlite")), false);
+      entry = await startInventoryEntry(
+        f.config,
+        { workerAuthorization: () => f.sign("worker") },
+        f.dependencies,
+      );
+      for (const claims of [
+        { sub: "outsider" },
+        { azp: "wrong-client" },
+        { aud: "https://wrong.example/mcp" },
+        { scope: "hub:claim" },
+      ]) {
+        const client = new InventoryMCPClient({
+          endpoint: entry.endpoint,
+          authorization: () => f.sign("requester", claims),
+        });
+        await assert.rejects(client.submit(args));
+      }
+      const client = new InventoryMCPClient({
+        endpoint: entry.endpoint,
+        authorization: () => f.sign(),
+      });
+      await assert.rejects(
+        client.submit({ ...args, request_key: "different" }),
+      );
+      await assert.rejects(client.claim(principal, {}));
+      for (const input of [
+        { ...args, request_key: "different" },
+        { ...args, task_type: "connectivity_check" },
+        { ...args, agent: "hermes" },
+        { ...args, destination: "elsewhere" },
+      ]) {
+        const denied = await rawCall(entry, await f.sign(), "submit", input);
+        assert.ok(
+          denied.status !== 200 ||
+            denied.body.error ||
+            denied.body.result?.isError,
+        );
+      }
+      assert.equal(
+        (await rawCall(entry, "Bearer invalid", "submit", args)).status,
+        401,
+      );
+      assert.equal(f.state.launches, 0);
+      assert.equal(f.state.entropy, 0);
+      await entry.close();
+      await entry.closed;
+    } finally {
+      if (entry) await entry.close();
+      f.cleanup();
+    }
+  },
+);
+
+test("manual CLI without explicit config does not bind, start or acquire credentials", () => {
+  const result = spawnSync(process.execPath, ["src/inventory-server.ts"], {
+    env: { PATH: process.env.PATH },
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "inventory_entry_failed_requires_review\n");
+});
+test(
+  "wrong worker authorization cannot claim or run; child stops with evidence retained",
+  { timeout: 18000, skip: process.getuid?.() === 0 },
+  async () => {
+    const f = await fixture();
+    let entry;
+    try {
+      entry = await startInventoryEntry(
+        f.config,
+        {
+          workerAuthorization: () => f.sign("worker", { azp: "wrong-client" }),
+        },
+        f.dependencies,
+      );
+      const client = new InventoryMCPClient({
+        endpoint: entry.endpoint,
+        authorization: () => f.sign(),
+      });
+      await client.submit(args);
+      await assert.rejects(entry.closed, /reconciliation/);
+      assert.equal(f.state.launches, 1);
+      assert.equal(f.state.child.exited, true);
+      const db = new DatabaseSync(join(f.profile, "runs_idempotency.db"));
+      assert.equal(
+        db.prepare("SELECT count(*) AS n FROM fixture_runs").get().n,
+        0,
+      );
+      db.close();
+      const hub = new DatabaseSync(join(f.profile, "inventory-hub.sqlite"));
+      assert.equal(
+        hub.prepare("SELECT state FROM tasks").get().state,
+        "queued",
+      );
+      hub.close();
+      assert.equal(
+        JSON.parse(
+          readFileSync(join(f.profile, "inventory-key-record.json"), "utf8"),
+        ).state,
+        "revoked",
+      );
+    } finally {
+      if (entry) await entry.close();
+      f.cleanup();
+    }
+  },
+);
+test(
+  "idle deadline closes the authenticated entry without generating a local key",
+  { timeout: 8000, skip: process.getuid?.() === 0 },
+  async () => {
+    const f = await fixture();
+    let entry;
+    try {
+      entry = await startInventoryEntry(
+        f.config,
+        { workerAuthorization: () => f.sign("worker") },
+        { ...f.dependencies, lifetimeMs: 1000 },
+      );
+      await entry.closed;
+      assert.equal(f.state.entropy, 0);
+      assert.equal(f.state.launches, 0);
+      assert.equal(existsSync(join(f.profile, "credential.scope")), false);
+    } finally {
+      if (entry) await entry.close();
+      f.cleanup();
+    }
+  },
+);
