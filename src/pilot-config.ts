@@ -90,8 +90,7 @@ export function preflightPilot(input: unknown) {
     });
     if (
       new Set(config.oauth.scopes).size !== 4 ||
-      config.peers.dots.clientId === config.peers.grok.clientId ||
-      config.peers.dots.subject === config.peers.grok.subject
+      config.peers.dots.clientId === config.peers.grok.clientId
     )
       throw Error();
     return {

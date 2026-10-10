@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PinnedJWTVerifier } from "./auth.ts";
+import { PinnedJWTVerifier, validatePolicyBindings } from "./auth.ts";
 import type { Principal } from "./types.ts";
 
 const scopes = [
@@ -158,10 +158,7 @@ export class ApprovedSubjects {
     this.#enabled = settings.enabled;
     this.#stopped = new Set(settings.stoppedSubjects ?? []);
     this.#policy = z.array(approval).max(100).parse(policy);
-    if (
-      new Set(this.#policy.map((p) => p.subject)).size !== this.#policy.length
-    )
-      throw Error("duplicate_subject");
+    validatePolicyBindings(this.#policy);
     for (const p of this.#policy) {
       if (
         p.kind === "user" &&
@@ -185,11 +182,16 @@ export class ApprovedSubjects {
   policy() {
     return structuredClone(this.#policy);
   }
-  isActive(subject: string, kind: "user" | "service") {
+  isActive(subject: string, kind: "user" | "service", clientId?: string) {
     return (
       this.#enabled &&
       !this.#stopped.has(subject) &&
-      this.#policy.some((p) => p.subject === subject && p.kind === kind)
+      this.#policy.some(
+        (p) =>
+          p.subject === subject &&
+          p.kind === kind &&
+          (clientId === undefined || p.clientId === clientId),
+      )
     );
   }
   stop(subject: string) {
@@ -335,7 +337,8 @@ export class Auth0Verifier {
         requireClientId: true,
         policy: this.subjects.policy(),
         now: this.#now,
-        active: async (subject, kind) => this.subjects.isActive(subject, kind),
+        active: async (subject, kind, clientId) =>
+          this.subjects.isActive(subject, kind, clientId),
       });
       const principal = await verifier.verify(authorization);
       // Recheck the local stop gate after all asynchronous signature work.
@@ -348,7 +351,8 @@ export class Auth0Verifier {
           .some(
             (p) =>
               p.subject === principal.subject &&
-              this.subjects.isActive(p.subject, p.kind),
+              p.clientId === principal.clientId &&
+              this.subjects.isActive(p.subject, p.kind, p.clientId),
           )
       )
         return null;

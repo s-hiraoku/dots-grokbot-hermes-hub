@@ -59,8 +59,21 @@ test("Auth0 fixture signed OAuth MCP roundtrip in both directions, without real 
   const { Auth0Verifier, ApprovedSubjects, OAuthResource } =
     await import("../src/oauth.ts");
   const { fetchMCP } = await import("../src/mcp-core.ts");
+  const dots = {
+    ...routes.dots,
+    subject: "fixture-shared-human",
+    operations: ["ping_submit", "ping_get", "ping_reply", "ping_pending"],
+  };
+  const grok = {
+    ...routes.grok,
+    subject: dots.subject,
+    operations: [...dots.operations],
+  };
   const h = new Hub(),
-    service = new PingService(h, routes),
+    service = new PingService(h, {
+      dots: { subject: dots.subject, clientId: dots.clientId },
+      grok: { subject: grok.subject, clientId: grok.clientId },
+    }),
     clients = [];
   const keys = await crypto.subtle.generateKey(
     {

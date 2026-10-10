@@ -175,6 +175,51 @@ export async function pingSuite(t, h) {
     },
   );
   await check(
+    "same human distinct clients preserve ownership and independent client stop",
+    async () => {
+      const a = { ...dots, subject: "fixture-shared-human" },
+        b = { ...grok, subject: a.subject };
+      const shared = new PingService(h, {
+        dots: { subject: a.subject, clientId: a.clientId },
+        grok: { subject: b.subject, clientId: b.clientId },
+      });
+      const task = await shared.submit(a, {
+        request_key: "shared",
+        payload: "ping",
+      });
+      await assert.rejects(shared.reply(a, reply(task)));
+      await assert.rejects(
+        shared.get({ ...a, clientId: "unregistered" }, { id: task.id }),
+      );
+      assert.equal((await shared.pending(a, {})).length, 0);
+      assert.equal((await shared.pending(b, {})).length, 1);
+      const fromB = await shared.submit(b, {
+        request_key: "shared",
+        payload: "ping",
+      });
+      assert.notEqual(fromB.id, task.id);
+      await h.authorization.setStopped(
+        { kind: "client", id: a.clientId },
+        true,
+        0,
+        "fixture-maintainer",
+      );
+      await assert.rejects(h.authorization.bind(a), /authorization_rejected/);
+      assert.equal((await h.authorization.bind(b)).clientId, b.clientId);
+      await assert.rejects(
+        shared.reply(b, reply(task)),
+        /authorization_rejected/,
+      );
+      await h.authorization.setStopped(
+        { kind: "subject", id: a.subject },
+        true,
+        1,
+        "fixture-maintainer",
+      );
+      await assert.rejects(h.authorization.bind(b), /authorization_rejected/);
+    },
+  );
+  await check(
     "recipient and origin stops block traffic, and restore does not revive stale diagnostics",
     async () => {
       const task = await service.submit(dots, {

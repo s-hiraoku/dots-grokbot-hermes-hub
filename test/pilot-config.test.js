@@ -15,7 +15,7 @@ const fixture = () => {
   c.oauth.audience = "https://hub.fixture.invalid/mcp";
   for (const side of ["dots", "grok"])
     c.peers[side] = {
-      subject: "fixture-" + side,
+      subject: "fixture-owner",
       clientId: "fixture-" + side,
       callback: "https://" + side + ".fixture.invalid/callback",
       clientAuthentication: "none",
@@ -35,7 +35,6 @@ test("scopes, peer separation, audience, loopback and free-only budget fail clos
     (c) => c.oauth.scopes.fill("hub:ping_get"),
     (c) => (c.oauth.scopes[0] = "hub:claim"),
     (c) => (c.peers.grok.clientId = c.peers.dots.clientId),
-    (c) => (c.peers.grok.subject = c.peers.dots.subject),
     (c) => (c.oauth.audience += "/"),
     (c) => (c.hub.host = "0.0.0.0"),
     (c) => (c.auth0Budget.monthlyUsd = 1),
