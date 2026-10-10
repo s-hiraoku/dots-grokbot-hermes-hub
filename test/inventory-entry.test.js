@@ -14,7 +14,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { request } from "node:http";
+import { fileURLToPath } from "node:url";
+import { startInventoryBootstrap } from "../src/inventory-bootstrap.ts";
 import { DatabaseSync } from "node:sqlite";
 import { startInventoryEntry } from "../src/inventory-entry.ts";
 import { InventoryChild } from "../src/inventory-factory.ts";
@@ -88,7 +91,7 @@ async function fixture() {
     enabled: true,
     oauth: {
       issuer: "https://fixture.us.auth0.com/",
-      resource: "https://hub.example/mcp",
+      resource: "https://hub.example/hab/mcp",
     },
     requester: {
       subject: "fixture-requester",
@@ -217,8 +220,35 @@ test(
     const ack = new Promise((resolve) => {
       releaseAck = resolve;
     });
+    const forward = (url, init) =>
+      new Promise((resolve, reject) => {
+        const req = request(
+          new URL(url),
+          {
+            method: init.method,
+            signal: init.signal,
+            headers: { ...init.headers, Host: "hub.example" },
+          },
+          (res) => {
+            let body = "";
+            res.on("data", (part) => {
+              body += part;
+            });
+            res.once("end", () =>
+              resolve(
+                new Response(body, {
+                  status: res.statusCode,
+                  headers: res.headers,
+                }),
+              ),
+            );
+          },
+        );
+        req.once("error", reject);
+        req.end(init.body);
+      });
     f.dependencies.workerFetch = async (url, init) => {
-      const response = await globalThis.fetch(url, init);
+      const response = await forward(url, init);
       if (JSON.parse(init.body).params.name === "complete") await ack;
       return response;
     };
@@ -231,6 +261,7 @@ test(
       const client = new InventoryMCPClient({
         endpoint: entry.endpoint,
         authorization: () => f.sign(),
+        fetch: forward,
       });
       const task = await client.submit(args);
       const duplicates = await Promise.all([
@@ -440,5 +471,285 @@ test(
       if (entry) await entry.close();
       f.cleanup();
     }
+  },
+);
+
+const bootstrapConfig = () => ({
+  version: 1,
+  mode: "inventory-metadata",
+  enabled: false,
+  oauth: {
+    issuer: "https://fixture.us.auth0.com/",
+    resource: "https://hub.example/hab/mcp",
+  },
+});
+const bootstrapRequest = (path, options = {}) =>
+  new Promise((resolve, reject) => {
+    const req = request(
+      {
+        host: "127.0.0.1",
+        port: 8789,
+        path,
+        method: options.method ?? "GET",
+        headers: { Host: "hub.example", ...options.headers },
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (part) => {
+          body += part;
+        });
+        res.once("end", () =>
+          resolve({
+            status: res.statusCode,
+            challenge: res.headers["www-authenticate"] ?? null,
+            body,
+          }),
+        );
+      },
+    );
+    req.once("error", reject);
+    req.end(options.body);
+  });
+const duplicateRequest = (headers) =>
+  new Promise((resolve, reject) => {
+    const req = request(
+      {
+        host: "127.0.0.1",
+        port: 8789,
+        path: "/hab/mcp",
+        method: "POST",
+        headers,
+      },
+      (res) => {
+        res.resume();
+        res.once("end", () => resolve(res.statusCode));
+      },
+    );
+    req.once("error", reject);
+    req.end();
+  });
+test(
+  "explicit metadata-only CLI serves planned Host/path and denies every task with zero effects",
+  { timeout: 12000 },
+  async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "hab-bootstrap-")));
+    const path = join(root, "bootstrap.local.json"),
+      receipt = join(root, "effect-counts.json");
+    const config = bootstrapConfig();
+    writeFileSync(path, JSON.stringify(config), { mode: 0o600 });
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        fileURLToPath(new URL("./bootstrap-guard-fixture.js", import.meta.url)),
+        fileURLToPath(new URL("../src/inventory-server.ts", import.meta.url)),
+      ],
+      {
+        cwd: root,
+        env: {
+          PATH: process.env.PATH,
+          HAB_INVENTORY_CONFIG: path,
+          HAB_BOOTSTRAP_TEST_RECEIPT: receipt,
+        },
+        stdio: "ignore",
+        shell: false,
+      },
+    );
+    const exited = new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    try {
+      let metadata;
+      for (let i = 0; i < 60; i++) {
+        try {
+          metadata = await bootstrapRequest(
+            "/.well-known/oauth-protected-resource/hab/mcp",
+          );
+          break;
+        } catch {
+          await pause(25);
+        }
+      }
+      assert.equal(metadata?.status, 200);
+      assert.deepEqual(JSON.parse(metadata.body), {
+        resource: config.oauth.resource,
+        authorization_servers: [config.oauth.issuer],
+        scopes_supported: ["hub:submit", "hub:get"],
+        bearer_methods_supported: ["header"],
+      });
+      assert.equal(
+        (
+          await bootstrapRequest(
+            "/.well-known/oauth-protected-resource/hab/mcp",
+            { headers: { Host: "127.0.0.1:8789" } },
+          )
+        ).status,
+        200,
+      );
+      const post = {
+        method: "POST",
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "submit", arguments: args },
+        }),
+        headers: { "Content-Type": "application/json" },
+      };
+      for (const authorization of [
+        undefined,
+        "Bearer invalid",
+        "Bearer synthetically.valid.token",
+      ]) {
+        const denied = await bootstrapRequest("/hab/mcp", {
+          ...post,
+          headers: {
+            ...post.headers,
+            ...(authorization ? { Authorization: authorization } : {}),
+          },
+        });
+        assert.equal(denied.status, 401);
+        assert.equal(
+          denied.challenge,
+          'Bearer resource_metadata="https://hub.example/.well-known/oauth-protected-resource/hab/mcp", scope="hub:submit hub:get"',
+        );
+      }
+      for (const headers of [
+        { Host: "evil.example" },
+        { Origin: "https://evil.example" },
+        { Host: "evil.example", "X-Forwarded-Host": "hub.example" },
+      ])
+        assert.equal(
+          (await bootstrapRequest("/hab/mcp", { ...post, headers })).status,
+          403,
+        );
+      assert.equal(
+        (
+          await bootstrapRequest("/hab/mcp", {
+            ...post,
+            headers: { Origin: "https://hub.example" },
+          })
+        ).status,
+        401,
+      );
+      assert.equal(
+        await duplicateRequest(["Host", "hub.example", "Host", "evil.example"]),
+        403,
+      );
+      assert.equal(
+        await duplicateRequest([
+          "Host",
+          "hub.example",
+          "Authorization",
+          "Bearer invalid",
+          "Authorization",
+          "Bearer other",
+        ]),
+        403,
+      );
+      assert.equal(
+        (await bootstrapRequest("/.well-known/oauth-protected-resource"))
+          .status,
+        401,
+      );
+      assert.equal(
+        (
+          await bootstrapRequest(
+            "/.well-known/oauth-protected-resource/hab/mcp?extra=1",
+          )
+        ).status,
+        401,
+      );
+      assert.equal(
+        (
+          await bootstrapRequest(
+            "/.well-known/oauth-protected-resource/hab/mcp",
+            { method: "POST" },
+          )
+        ).status,
+        405,
+      );
+      // File edits do not promote a running bootstrap; another validated process
+      // invocation is required, with explicit confirmed subjects and authorization.
+      writeFileSync(
+        path,
+        JSON.stringify({
+          ...config,
+          mode: "inventory-one-shot",
+          enabled: true,
+          requester: { subject: "fixture", clientId: "fixture" },
+        }),
+      );
+      for (const name of [
+        "submit",
+        "claim",
+        "heartbeat",
+        "complete",
+        "get",
+        "cancel",
+      ])
+        assert.equal(
+          (
+            await bootstrapRequest("/hab/mcp", {
+              ...post,
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                method: "tools/call",
+                params: { name, arguments: args },
+              }),
+            })
+          ).status,
+          401,
+        );
+      child.kill("SIGTERM");
+      assert.deepEqual(await exited, { code: 0, signal: null });
+      assert.deepEqual(JSON.parse(readFileSync(receipt, "utf8")), {
+        sqlite: 0,
+        randomBytes: 0,
+        spawn: 0,
+        outboundFetch: 0,
+      });
+      const { readdirSync } = await import("node:fs");
+      assert.deepEqual(readdirSync(root).sort(), [
+        "bootstrap.local.json",
+        "effect-counts.json",
+      ]);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+        await exited;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+test("bootstrap rejects authority fields, enabled=true and malformed mode before binding", async () => {
+  const config = bootstrapConfig();
+  for (const input of [
+    undefined,
+    { ...config, enabled: true },
+    { ...config, mode: "inventory-one-shot" },
+    { ...config, worker: {} },
+    { ...config, subjects: [] },
+    { ...config, reviewed: {} },
+    { ...config, oauth: { ...config.oauth, scopes: ["hub:complete"] } },
+  ])
+    await assert.rejects(startInventoryBootstrap(input), /config_rejected/);
+});
+test(
+  "bootstrap reaches a finite idle deadline without credentials or task setup",
+  { timeout: 5000 },
+  async () => {
+    const entry = await startInventoryBootstrap(bootstrapConfig(), {
+      lifetimeMs: 1000,
+    });
+    assert.equal(
+      (await bootstrapRequest("/hab/mcp", { method: "POST" })).status,
+      401,
+    );
+    await entry.closed;
+    await assert.rejects(bootstrapRequest("/hab/mcp"));
   },
 );

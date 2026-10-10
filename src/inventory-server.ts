@@ -1,7 +1,20 @@
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { readRuntimeConfig } from "./runtime-config.ts";
-import { startInventoryEntry } from "./inventory-entry.ts";
+type Entry = { close: () => Promise<void>; closed: Promise<void> };
+async function waitForEntry(entry: Entry) {
+  const stop = () => {
+    void entry.close();
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  try {
+    await entry.closed;
+  } finally {
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
+  }
+}
 
 /** Manual process entry. Already acquired worker authorization arrives once on
  * stdin, never argv, environment, a task, a file lookup or an OAuth acquisition.
@@ -10,6 +23,27 @@ export async function inventoryMain() {
   if (!process.env.HAB_INVENTORY_CONFIG)
     throw Error("inventory_config_required");
   const config = readRuntimeConfig(process.env.HAB_INVENTORY_CONFIG);
+  if (
+    config &&
+    typeof config === "object" &&
+    "mode" in config &&
+    config.mode === "inventory-metadata"
+  ) {
+    const { startInventoryBootstrap } =
+      await import("./inventory-bootstrap.ts");
+    return await waitForEntry(await startInventoryBootstrap(config));
+  }
+  // Never consume credential input for an absent/disabled/unrecognized mode.
+  if (
+    !config ||
+    typeof config !== "object" ||
+    !("mode" in config) ||
+    config.mode !== "inventory-one-shot" ||
+    !("enabled" in config) ||
+    config.enabled !== true
+  )
+    throw Error("inventory_config_rejected");
+  const { startInventoryEntry } = await import("./inventory-entry.ts");
   let bytes = Buffer.alloc(0);
   const timeout = setTimeout(
     () => process.stdin.destroy(Error("inventory_input_timeout")),
@@ -42,17 +76,10 @@ export async function inventoryMain() {
   const entry = await startInventoryEntry(config, {
     workerAuthorization: async () => authorization,
   });
-  const stop = () => {
-    void entry.close();
-  };
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
   try {
-    await entry.closed;
+    await waitForEntry(entry);
   } finally {
     authorization = "";
-    process.removeListener("SIGINT", stop);
-    process.removeListener("SIGTERM", stop);
   }
 }
 if (

@@ -100,3 +100,32 @@ sidecar/stop-failure cases. A synthetic callback success alone is not acceptance
 Sites deployment, plugin registration, public endpoints, credential issuance,
 privilege expansion, persistent workers, real agent external communication and
 model calls remain outside this implementation. None were performed by tests.
+
+## Metadata-only bootstrap
+
+A separate explicit `inventory-metadata` mode serves protected-resource metadata
+without constructing a task service, database, JWT verifier, worker, local key or
+model connection. Copy `config/inventory-metadata.example.json` to an owner-only
+mode-0600 `*.local.json`, set the reviewed issuer/resource, and manually invoke
+`HAB_INVENTORY_CONFIG` with `node src/inventory-server.ts`. This mode requires
+`enabled: false`, rejects authority/worker fields and never reads token stdin.
+It closes after ten minutes or SIGINT/SIGTERM. Editing its config cannot promote
+it: stop it and use a separate confirmed active configuration and invocation.
+
+For a resource `https://hub.example/hab/mcp`, the two exact ingress paths are
+`/hab/mcp` and `/.well-known/oauth-protected-resource/hab/mcp`; root metadata and
+existing routes need no replacement. Shared HTTP admission permits only the
+configured resource Host or `127.0.0.1:8789`. Unknown Host, duplicate Host/
+Authorization/Origin and a nonmatching Origin receive 403. Forwarded headers
+confer no authority. Metadata GET returns 200; its other methods return 405.
+Every task request receives 401, including requests with a Bearer value.
+Authenticated one-shot mode retains JWT/subject/client/scope authorization.
+
+Raw HTTP tests send the configured public Host and prefixed path through the
+complete synthetic authenticated round trip. A separate CLI bootstrap fixture
+rejects every task operation and instruments SQLite construction, key random-byte
+generation, process spawn and outbound fetch: all counters remain zero. Changing
+its config during operation also leaves every task denied. These are loopback
+fixtures; actual external ingress, OAuth callback registration, verified subjects
+and real tokens/model calls remain untested and require separate authorization.
+Metadata availability alone does not complete a ChatGPT OAuth/tool connection.

@@ -13,6 +13,7 @@ import {
   InventoryMCPClient,
 } from "./mcp-worker-client.ts";
 import type { Principal, Task } from "./types.ts";
+import { inventoryHTTPBoundary } from "./inventory-http.ts";
 
 const identity = z
   .object({
@@ -155,24 +156,12 @@ export async function startInventoryEntry(
   void closed.catch(() => {});
   let closure: Promise<void> | undefined;
   const server = createServer((req, res) => {
-    const duplicate = ["host", "authorization", "origin"].some(
-      (name) =>
-        req.rawHeaders.filter(
-          (_v, i) => i % 2 === 0 && req.rawHeaders[i].toLowerCase() === name,
-        ).length > 1,
-    );
-    if (
-      stopping ||
-      duplicate ||
-      req.headers.host !== "127.0.0.1:8789" ||
-      (req.headers.origin !== undefined &&
-        req.headers.origin !== new URL(oauth.resource).origin)
-    ) {
+    if (stopping) {
       res.writeHead(403, { "Cache-Control": "no-store" });
       res.end();
       return;
     }
-    void nodeHandler(req, res).catch(() => {
+    void guardedHandler(req, res).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -283,6 +272,7 @@ export async function startInventoryEntry(
     undefined,
     oauth,
   );
+  const guardedHandler = inventoryHTTPBoundary(oauth, nodeHandler);
   const endpoint = `http://127.0.0.1:8789${oauth.mcpPath}`;
   const timer = setTimeout(() => {
     void close();
