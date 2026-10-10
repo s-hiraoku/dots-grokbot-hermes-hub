@@ -1,5 +1,7 @@
 # Fixed pilot compatibility
 
+This page records the earlier fixed-connectivity prototype and its local trial history. It is not acceptance of the current inventory profile, new key lifecycle or no-site dependency bundle. Current inventory preparation and remaining gates are in [MVP acceptance](mvp-acceptance.md) and [HAB roles](hab-roles.md).
+
 `HermesRuns.connectPilot` supports the constrained Runs wrapper without opening extra API routes or accepting model/session/tool overrides. It submits exactly `{"input":"Reply with exactly HUB_HERMES_OK."}`. It checks authenticated `pilot_policy` (that exact input, tools zero, session overrides false, personal context false), required Bearer auth, submission/status and durable idempotency. It does not request `/v1/toolsets` in this mode, and never interprets 404 as tools zero. Standard mode still requires toolsets and its original fixed contract.
 
 Completion requires exact `HUB_HERMES_OK` with actual runtime `openai-codex` / `gpt-6.1-sol`. Only then is the result normalized to the Hub's existing connectivity success text. Newline/extra output, model/provider mismatch and uncertain terminal status keep the execution slot/receipt for reconciliation.

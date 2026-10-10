@@ -1,6 +1,8 @@
 # Scope and boundaries
 
-Dots retains personal context, consultation, important-mail decisions, mark-read after notification, and schedule summaries. Grok retains its existing connpass job and future Calendar/browser/long-task work. Hermes handles development experiments, MCP and Skills. These are design roles: this version accepts only a harmless connectivity task assigned to Hermes by verified server policy. Results and notifications never submit tasks.
+For the overall HAB roles, current evidence and hosting decisions, start at [README](../README.md) and [ADR](hab-decisions.md). This page owns the technical queue/adapter contract.
+
+Dots retains personal context, consultation, important-mail decisions, mark-read after notification, and schedule summaries. Grok retains its existing connpass job and future Calendar/browser/long-task work. Hermes handles development experiments, MCP and Skills. These are design roles. Current limited task contracts are connectivity_check and the opt-in fixed shift_log_inventory; the diagnostic ping/pong service is separate. Verified server policy chooses the route and allowed task types. Results and notifications never submit tasks.
 
 ## Authentication and tool contracts
 
@@ -20,13 +22,13 @@ The Mac's separate journal is a recovery receipt, not a second task-state databa
 
 `Adapter.once()` handles one admission/status step; `run()` polls until terminal while the receipt exists. A watchdog renews leases during blocked create/get calls, with a finite renewal deadline. Initial, periodic and final heartbeat payloads contain only protocol fields. Renewal failure or explicit local stop aborts local waiting and retains the receipt and execution slot for reconciliation. This does not imply stopping a remote run. The adapter rejects unsafe timing budgets and unverified tool-isolation/durable-idempotency contracts.
 
-Cancelled known work is read until the run driver confirms a terminal state. Unknown cancellation remains unresolved. Neither case silently clears the gate; authorized terminal reconciliation/release is not implemented. No guessed stop endpoint is called. The real driver and authentication bootstrap remain gated: mock booleans are test seams, not proof of actual tool or memory isolation.
+Cancelled known work is read until the run driver confirms a terminal state. Unknown cancellation remains unresolved. Neither case silently clears the gate; general terminal reconciliation/release is not implemented. The internal operator reconciliation API can close a gate only after trusted proof of the exact fixed successful run on the original boundary; see [local integration](local-integration.md). No guessed stop endpoint is called. The real driver and authentication bootstrap remain gated: mock booleans are test seams, not proof of actual tool or memory isolation.
 
 ## Notification foundation
 
 The transactional outbox is at least once; receivers must deduplicate stable event IDs. Offline-tested `EventSender` adds signed callback challenge verification, fixed terminal payloads, owner/access/expiry checks, bounded retry/backoff and 410/413/redirect policy rejection. `PinnedCallbackTransport` is a Node preparation adapter: exact approved URLs, HTTPS, fresh public-address validation at each connection, pinned DNS address and original TLS host, response bounds and no redirect following. The Worker egress adapter remains unimplemented.
 
-No events capability, subscription method, callback secret or delivery scheduler is installed. This is not formal MCP Events support; durable principal-scoped subscriptions, unsubscribe/cursor semantics and hosted delivery remain gates described in the [migration status](migration-plan.md).
+Opt-in EventAPI, durable encrypted subscriptions, authenticated list/subscribe/unsubscribe and fenced delivery are implemented and tested with fixtures. Default entrypoints supply no EventAPI. Real callbacks, hosted egress and resident delivery are unconnected; cursor-based replay is unsupported. See [local integration](local-integration.md).
 
 ## Hermes prerequisites
 
@@ -37,15 +39,15 @@ Desktop UI backend and standard gateway API are distinct interfaces. Do not assu
 ## Remaining approval and verification gates
 
 1. Isolated Hermes profile, key creation/storage and its exact endpoint/tool/memory policy; independent fixed-payload Runs. Keys must stay outside model context/chat/source/logs.
-2. Private Sites/D1 target, any costs, verified user/service auth separation and OAI-Sites-Authorization interoperability. Local D1/Worker success does not establish hosted behavior.
+2. Mac/SQLite ingress, Auth0 production wiring and approved Hub-specific Tailscale routing. Sites/D1 are deferred portability options; local tests do not establish hosted auth interoperability.
 3. Approved fixed outbound Mac-to-Hub traffic and any background worker. Current worker tests are manual and local.
 4. Authorized cancellation terminal reconciliation/gate release and real endpoint/status normalization; cloud revocation/lease/stop failure checks.
 5. Plugin registration and formally verified notification destinations after subscription/egress/replay security is complete.
 
-No deployment, Site or cloud D1 resource, new credential, real agent execution, subscription, plugin registration or background worker has occurred.
+No current production Hub deployment, Site/cloud D1 resource, live subscription/plugin registration or resident Hub worker is installed. An earlier fixed-connectivity local trial is recorded separately in [fixed pilot history](fixed-pilot.md); it does not validate the current inventory bridge or cloud clients.
 
 ## Execution planning beyond the fixed pilot
 
 Keep the responsible agent, execution tool and execution environment separate. Dots, Grok Bot and Hermes retain their own judgement. A future task contract should identify its owner/responsible agent, requested execution environment, allowed tools, workspace and completion criterion; authorization must derive these permissions from verified identity and policy rather than task-supplied agent names. Claude Code, Codex and Cursor can be selected execution tools only after their real connection and scopes are verified. Mac and cloud are distinct environments.
 
-Before supporting development work, add execution idempotency across tools, exclusive workspace reservations or isolated worktrees, bounded grants, result provenance and explicit reconciliation of unknown runs. Existing cron jobs must remain owned by their current system and must not be recreated by the Hub. Terminal events do not automatically submit another task. Cursor Cloud Agents and a Grok Bot external control interface are distinct capabilities; one does not establish access to the other. The first release still admits only the fixed connectivity task.
+Before supporting development work, add execution idempotency across tools, exclusive workspace reservations or isolated worktrees, bounded grants, result provenance and explicit reconciliation of unknown runs. Existing cron jobs must remain owned by their current system and must not be recreated by the Hub. Terminal events do not automatically submit another task. Cursor Cloud Agents and a Grok Bot external control interface are distinct capabilities; one does not establish access to the other. Current task contracts remain fixed connectivity and opt-in inventory; general development work is not admitted.
