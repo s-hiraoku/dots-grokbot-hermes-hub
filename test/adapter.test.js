@@ -6,6 +6,49 @@ import { join } from "node:path";
 import { Adapter, MockRuns, drainOutbox } from "../src/adapter.ts";
 import { Journal } from "../src/journal.ts";
 import { Hub, owner, worker, submit, journal, RESPONSE } from "./fixtures.js";
+for (const [scope, boundary] of [
+  ["runner-a", "runner-b"],
+  ["runner-a", undefined],
+  [undefined, "runner-b"],
+]) {
+  test(`runner scope mismatch (${scope}/${boundary}) rejects before claim and leaves admission available`, async () => {
+    let now = 100;
+    const h = new Hub(":memory:", () => now);
+    const j = journal();
+    const runs = new MockRuns();
+    runs.boundaryId = boundary;
+    const principal = { ...worker, runnerScope: scope };
+    const claim = h.claim.bind(h);
+    let claims = 0;
+    h.claim = (...args) => {
+      claims++;
+      return claim(...args);
+    };
+    try {
+      const task = await submit(h);
+      await assert.rejects(
+        new Adapter(h, principal, runs, j).once(),
+        /runner_scope_mismatch/,
+      );
+      assert.equal(claims, 0);
+      assert.equal(runs.calls, 0);
+      assert.equal(j.load(), null);
+      now += 60000;
+      const untouched = await h.get(owner, task);
+      assert.equal(untouched.state, "queued");
+      assert.equal(untouched.execution_open, 0);
+      assert.equal(untouched.run_id, null);
+      runs.boundaryId = scope;
+      await new Adapter(h, principal, runs, j).run();
+      const completed = await h.get(owner, task);
+      assert.equal(completed.state, "succeeded");
+      assert.equal(completed.execution_open, 0);
+      assert.equal(runs.calls, 1);
+    } finally {
+      h.close();
+    }
+  });
+}
 test("automatic heartbeat maintains lease over multiple simulated 30-second windows", async () => {
   let now = 100;
   const h = new Hub(":memory:", () => now),

@@ -95,6 +95,11 @@ export class Adapter {
     )
       throw new Error("runner_scope_requires_reconciliation");
     if (!entry) {
+      if (
+        (this.principal.runnerScope ?? undefined) !==
+        (this.runs.boundaryId ?? undefined)
+      )
+        throw new Error("runner_scope_mismatch");
       const task = await this.hub.claim(this.principal, {});
       if (!task) return null;
       const admitted = now();
@@ -123,6 +128,19 @@ export class Adapter {
       this.journal.clear();
       return task.id;
     }
+    if (
+      task.state === "cancelled" &&
+      task.execution_open === 0 &&
+      receipt.run_id &&
+      task.run_id === receipt.run_id &&
+      task.runner_scope === receipt.runner_scope
+    ) {
+      checkStop();
+      this.journal.clear();
+      return task.id;
+    }
+    if (task.runner_scope && task.runner_scope !== this.runs.boundaryId)
+      throw Error("runner_scope_requires_reconciliation");
     if (task.state === "cancelled") {
       // Do not send a guessed stop request or clear a receipt before terminal confirmation.
       if (!receipt.run_id)

@@ -15,7 +15,9 @@
     "schema:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/sdk": "1.32.0",
+    "@modelcontextprotocol/server": "2.3.1",
     "drizzle-orm": "^0.45.3",
     "ipaddr.js": "^2.5.0",
     "standardwebhooks": "^1.1.1",

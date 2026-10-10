@@ -26,6 +26,8 @@ export class EventSender {
     now?: () => number;
     wait?: (ms: number) => Promise<void>;
     maxAttempts?: number;
+    allowGrantedRecipient?: boolean;
+    previousSecret?: { secret: string; until: number };
   }) {
     this.options = readonlyOptions;
   }
@@ -36,6 +38,8 @@ export class EventSender {
     now?: () => number;
     wait?: (ms: number) => Promise<void>;
     maxAttempts?: number;
+    allowGrantedRecipient?: boolean;
+    previousSecret?: { secret: string; until: number };
   };
   private now() {
     return this.options.now?.() ?? Date.now();
@@ -47,17 +51,21 @@ export class EventSender {
       s.task_id !== taskId ||
       !(await this.options.authorise(s.subject, taskId))
     )
-      throw new Error("subscription_not_authorised");
+      throw new CallbackPolicyError("subscription_not_authorised");
     return s;
   }
   private headers(id: string, body: string) {
     const s = this.options.subscription,
       date = new Date(this.now());
+    let signature = new Webhook(s.secret).sign(id, date, body);
+    const previous = this.options.previousSecret;
+    if (previous && previous.until > this.now())
+      signature += ` ${new Webhook(previous.secret).sign(id, date, body)}`;
     return {
       "Content-Type": "application/json",
       "webhook-id": id,
       "webhook-timestamp": String(Math.floor(date.getTime() / 1000)),
-      "webhook-signature": new Webhook(s.secret).sign(id, date, body),
+      "webhook-signature": signature,
       "X-MCP-Subscription-Id": s.id,
     };
   }
@@ -72,6 +80,12 @@ export class EventSender {
       this.headers(id, body),
       body,
     );
+    if (
+      response.status >= 300 &&
+      response.status < 500 &&
+      response.status !== 429
+    )
+      throw new CallbackPolicyError("callback_verification_terminal_rejection");
     if (
       response.status < 200 ||
       response.status >= 300 ||
@@ -97,7 +111,7 @@ export class EventSender {
     const s = await this.active(event.task);
     if (
       this.verifiedUntil <= this.now() ||
-      event.owner !== s.subject ||
+      (event.owner !== s.subject && !this.options.allowGrantedRecipient) ||
       !["succeeded", "failed", "cancelled"].includes(event.event)
     )
       throw new Error("event_not_authorised");

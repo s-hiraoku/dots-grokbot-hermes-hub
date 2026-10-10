@@ -10,6 +10,9 @@ export default [
       globals: {
         AbortController: "readonly",
         Response: "readonly",
+        Request: "readonly",
+        crypto: "readonly",
+        TextEncoder: "readonly",
         Buffer: "readonly",
         URL: "readonly",
         structuredClone: "readonly",

@@ -11,6 +11,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { Adapter, MockRuns } from "../src/adapter.ts";
 import { MCPHubClient } from "../src/client.ts";
 import { owner, worker, submit, journal, finish } from "./fixtures.js";
+import { SecretVault, SubscriptionService } from "../src/subscriptions.ts";
 import { storeSuite } from "./store-suite.js";
 const options = (path) =>
   convertV4MiniflareOptions({
@@ -48,6 +49,70 @@ test("local Worker D1 contract, concurrent calls and HTTP adapter roundtrip", as
     await migrate(db);
     const h = new D1Hub(db);
     await storeSuite(t, h);
+    await t.test(
+      "D1 persists subscription and fenced delivery state",
+      async () => {
+        await h.driver.batch([{ sql: "DELETE FROM tasks" }]);
+        const reader = {
+          subject: "d1-dots-fixture",
+          operations: ["events", "get"],
+        };
+        const task = await h.submit(
+          {
+            ...owner,
+            resultReaders: [{ subject: reader.subject, notify: true }],
+          },
+          { task_type: "connectivity_check", request_key: "d1-events" },
+        );
+        let delivered = 0;
+        const vault = new SecretVault(
+          await crypto.subtle.generateKey(
+            { name: "AES-GCM", length: 256 },
+            false,
+            ["encrypt", "decrypt"],
+          ),
+        );
+        const service = () =>
+          new SubscriptionService({
+            hub: h,
+            vault,
+            identityActive: async () => true,
+            transportFor: () => ({
+              post: async (_url, _headers, body) => {
+                const event = JSON.parse(body);
+                if (event.type === "verification")
+                  return {
+                    status: 200,
+                    body: JSON.stringify({ challenge: event.challenge }),
+                  };
+                delivered++;
+                return { status: 204, body: "" };
+              },
+            }),
+          });
+        await service().subscribe(reader, {
+          name: "task.terminal",
+          arguments: { task_id: task.id },
+          delivery: {
+            mode: "webhook",
+            url: "https://callback.example/d1-fixture",
+            secret: `whsec_${Buffer.alloc(32, 4).toString("base64")}`,
+          },
+        });
+        await finish(h, await h.claim(worker));
+        await service().dispatchOne();
+        await service().dispatchOne();
+        assert.equal(delivered, 1);
+        const rows = await h.driver.batch([
+          {
+            sql: "SELECT state,attempts FROM deliveries WHERE subscription IN(SELECT id FROM subscriptions WHERE task=?)",
+            params: [task.id],
+          },
+        ]);
+        assert.equal(rows[0][0].state, "delivered");
+        assert.equal(rows[0][0].attempts, 1);
+      },
+    );
     for (const operation of ["heartbeat", "complete"])
       await t.test(
         `D1 ${operation} rejects expiry during driver delay`,

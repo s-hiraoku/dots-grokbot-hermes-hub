@@ -8,12 +8,23 @@ export type State =
   | "failed"
   | "cancelled";
 export type Operation =
-  "submit" | "claim" | "heartbeat" | "complete" | "get" | "cancel" | "events";
+  | "submit"
+  | "claim"
+  | "heartbeat"
+  | "complete"
+  | "get"
+  | "cancel"
+  | "events"
+  | "grants"
+  | "reconcile";
 export interface Principal {
   subject: string;
   operations: readonly Operation[];
   destination?: "hermes";
   worker?: "hermes";
+  runnerScope?: string;
+  /** Trusted verifier policy only; never copied from task arguments. */
+  resultReaders?: readonly { subject: string; notify: boolean }[];
 }
 export interface Lease {
   id: string;
@@ -26,6 +37,8 @@ export interface Task extends Lease {
   state: State;
   lease: number | null;
   run_id: string | null;
+  runner_scope: string | null;
+  runner_subject: string | null;
   result: string | null;
   execution_open: number;
   at: number;
@@ -93,4 +106,12 @@ export interface Outbox {
   event: string;
   at: number;
   delivered: number;
+}
+
+export class CallbackEndpointError extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super("Callback verification failed");
+    this.reason = reason;
+  }
 }

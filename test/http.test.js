@@ -109,13 +109,19 @@ for (const pilot of [false, true])
           })
         : await HermesRuns.connect(hermes.options);
       const remote = new MCPHubClient(b);
+      worker.runnerScope = runs.boundaryId;
       const heartbeats = [];
       const heartbeat = remote.heartbeat.bind(remote);
       remote.heartbeat = async (principal, args) => {
         heartbeats.push(structuredClone(args));
         return heartbeat(principal, args);
       };
-      await new Adapter(remote, worker, runs, journal).run();
+      await new Adapter(
+        remote,
+        { ...worker, runnerScope: runs.boundaryId },
+        runs,
+        journal,
+      ).run();
       assert.equal(
         (await call(a, "get", { id: adapterTask.id })).state,
         "succeeded",
