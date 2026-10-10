@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath, readdir } from "node:fs/promises";
+import { access, lstat, readFile, realpath, readdir } from "node:fs/promises";
+import { constants } from "node:fs";
 import { resolve, join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -11,32 +12,95 @@ const digest = (data: string | Buffer) =>
 // Hash every regular file, including ignored archives/custom-loader formats.
 // Code roots must be reviewed immutable trees without secrets or runtime data.
 // The approved roots must cover the entire reviewed Python import/runtime closure.
-export async function measureCodeTree(root: string, before = Infinity) {
+const treeOptions = z
+  .object({
+    systemRuntime: z.boolean().optional(),
+    maxBytes: z.number().int().positive().max(1073741824).optional(),
+    aliases: z.record(z.string(), z.string()).optional(),
+    reviewedResources: z
+      .array(
+        z
+          .string()
+          .refine(
+            (p) =>
+              p.length > 0 &&
+              !p.startsWith("/") &&
+              !p.split("/").includes("..") &&
+              ["logs", "runtime", "secrets"].includes(p.split("/").at(-1)!),
+          ),
+      )
+      .max(8)
+      .optional(),
+    excludedSystemSitePackages: z
+      .string()
+      .regex(/^python3\.\d+\/site-packages$/)
+      .optional(),
+  })
+  .strict();
+type TreeOptions = z.infer<typeof treeOptions>;
+export async function measureCodeTree(
+  root: string,
+  before = Infinity,
+  options: TreeOptions = {},
+) {
+  const settings = treeOptions.parse(options);
   const entries: string[][] = [];
   let count = 0,
     total = 0;
   async function walk(path: string, relative: string) {
     const stat = await lstat(path);
+    const alias =
+      settings.systemRuntime &&
+      stat.isSymbolicLink() &&
+      settings.aliases?.[relative];
+    if (settings.systemRuntime) {
+      if (stat.uid !== 0) throw new Error("pilot_system_runtime_rejected");
+    }
+    try {
+      await access(path, constants.W_OK);
+      throw new Error(
+        settings.systemRuntime
+          ? "pilot_system_runtime_writable"
+          : "pilot_code_integrity_rejected",
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EACCES") throw error;
+    }
     if (
       ++count > 100000 ||
-      stat.isSymbolicLink() ||
+      (stat.isSymbolicLink() && !alias) ||
       (stat.uid !== 0 && stat.uid !== process.getuid?.()) ||
-      stat.mode & 0o222 ||
+      (!settings.systemRuntime && stat.mode & 0o222) ||
       stat.ctimeMs > before ||
-      (await realpath(path)) !== path
+      (await realpath(path)) !== (alias || path)
     )
       throw new Error("pilot_code_integrity_rejected");
-    if (stat.isDirectory()) {
+    if (alias) {
+      entries.push([relative, "approved-system-alias", alias]);
+      const after = await lstat(path);
+      if (after.ctimeMs !== stat.ctimeMs || after.ino !== stat.ino)
+        throw new Error("pilot_code_integrity_rejected");
+    } else if (stat.isDirectory()) {
       entries.push([relative, "directory"]);
       for (const name of (await readdir(path)).sort()) {
         if (name === ".git") continue; // Git metadata must never be part of the import closure.
         if (
           (name.startsWith(".env") && name !== ".env.example") ||
-          ["secrets", "runtime", "logs"].includes(name)
+          (["secrets", "runtime", "logs"].includes(name) &&
+            !settings.reviewedResources?.includes(
+              relative ? `${relative}/${name}` : name,
+            ))
         )
           throw new Error("pilot_code_root_contains_private_data");
         const child = join(path, name),
           sub = relative ? `${relative}/${name}` : name;
+        if (
+          settings.systemRuntime &&
+          sub === settings.excludedSystemSitePackages
+        ) {
+          entries.push([sub, "excluded-disabled-system-site-packages"]);
+          continue;
+        }
         await walk(child, sub);
       }
       const after = await lstat(path);
@@ -44,7 +108,7 @@ export async function measureCodeTree(root: string, before = Infinity) {
         throw new Error("pilot_code_integrity_rejected");
     } else if (stat.isFile()) {
       total += stat.size;
-      if (total > 536870912 || stat.size > 67108864)
+      if (total > (settings.maxBytes ?? 536870912) || stat.size > 67108864)
         throw new Error("pilot_code_integrity_rejected");
       const bytes = await readFile(path);
       const after = await lstat(path);
@@ -70,16 +134,23 @@ const policySchema = z
     sourceRoot: z.string(),
     wrapperPath: z.string(),
     pythonPath: z.string(),
+    processInterpreterPath: z.string().optional(),
     codeTrees: z
       .array(
-        z
-          .object({
+        treeOptions
+          .extend({
             root: z.string(),
             sha256: z.string().regex(/^[a-f0-9]{64}$/),
           })
           .strict(),
       )
-      .min(1),
+      .min(1)
+      .max(6)
+      .refine(
+        (trees) =>
+          trees.reduce((sum, t) => sum + (t.maxBytes ?? 536870912), 0) <=
+          2147483648,
+      ),
     pythonSHA256: z.string().regex(/^[a-f0-9]{64}$/),
     wrapperSHA256: z.string().regex(/^[a-f0-9]{64}$/),
     configSHA256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -185,6 +256,7 @@ export class PilotInspector {
       policy.sourceRoot,
       policy.wrapperPath,
       policy.pythonPath,
+      ...(policy.processInterpreterPath ? [policy.processInterpreterPath] : []),
     ])
       if (resolve(path) !== path) throw new Error("pilot_policy_rejected");
     if (
@@ -202,9 +274,44 @@ export class PilotInspector {
       !policy.codeTrees.some((tree) =>
         policy.pythonPath.startsWith(`${tree.root}/`),
       ) ||
+      (policy.processInterpreterPath !== undefined &&
+        !policy.codeTrees.some(
+          (tree) =>
+            tree.systemRuntime && tree.root === policy.processInterpreterPath,
+        )) ||
       policy.codeTrees.some((tree) => resolve(tree.root) !== tree.root)
     )
       throw new Error("pilot_policy_rejected");
+    for (const tree of policy.codeTrees) {
+      if (tree.aliases && !tree.systemRuntime)
+        throw new Error("pilot_policy_rejected");
+      if (
+        tree.excludedSystemSitePackages &&
+        (!tree.systemRuntime || !tree.root.endsWith("/lib"))
+      )
+        throw new Error("pilot_policy_rejected");
+      for (const [relative, target] of Object.entries(tree.aliases ?? {})) {
+        if (
+          !relative ||
+          relative.startsWith("/") ||
+          relative.split("/").includes("..") ||
+          resolve(target) !== target ||
+          !policy.codeTrees.some(
+            (t) =>
+              t.systemRuntime &&
+              (target === t.root || target.startsWith(`${t.root}/`)) &&
+              (!t.excludedSystemSitePackages ||
+                !(
+                  target === join(t.root, t.excludedSystemSitePackages) ||
+                  target.startsWith(
+                    `${join(t.root, t.excludedSystemSitePackages)}/`,
+                  )
+                )),
+          )
+        )
+          throw new Error("pilot_policy_rejected");
+      }
+    }
     this.endpoint = url.href;
     this.scopeId = `pilot-${digest(JSON.stringify({ ...this.#policy, endpoint: this.endpoint }))}`;
     this.#probe = options.probe ?? observePilot;
@@ -269,7 +376,8 @@ export class PilotInspector {
       observed.uid !== process.getuid?.() ||
       !Number.isFinite(observed.startedAt) ||
       observed.startedAt > this.#now() ||
-      observed.command !== `${p.pythonPath} ${p.wrapperPath}` ||
+      observed.command !==
+        `${p.processInterpreterPath ?? p.pythonPath} ${p.wrapperPath}` ||
       observed.sourceCommit !== p.sourceCommit ||
       observed.listeners.length !== 1 ||
       observed.listeners[0] !== `127.0.0.1:${url.port}`
@@ -278,7 +386,13 @@ export class PilotInspector {
     const python = await this.pinnedFile(p.pythonPath, p.pythonSHA256);
     for (const tree of p.codeTrees)
       if (
-        (await measureCodeTree(tree.root, observed.startedAt)) !== tree.sha256
+        (await measureCodeTree(tree.root, observed.startedAt, {
+          systemRuntime: tree.systemRuntime,
+          maxBytes: tree.maxBytes,
+          aliases: tree.aliases,
+          reviewedResources: tree.reviewedResources,
+          excludedSystemSitePackages: tree.excludedSystemSitePackages,
+        })) !== tree.sha256
       )
         throw new Error("pilot_code_integrity_rejected");
     // ps has one-second precision. Files must predate the process's earliest start instant.

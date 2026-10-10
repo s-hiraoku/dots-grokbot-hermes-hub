@@ -43,3 +43,9 @@ Desktop UI backend and standard gateway API are distinct interfaces. Do not assu
 5. Plugin registration and formally verified notification destinations after subscription/egress/replay security is complete.
 
 No deployment, Site or cloud D1 resource, new credential, real agent execution, subscription, plugin registration or background worker has occurred.
+
+## Execution planning beyond the fixed pilot
+
+Keep the responsible agent, execution tool and execution environment separate. Dots, Grok Bot and Hermes retain their own judgement. A future task contract should identify its owner/responsible agent, requested execution environment, allowed tools, workspace and completion criterion; authorization must derive these permissions from verified identity and policy rather than task-supplied agent names. Claude Code, Codex and Cursor can be selected execution tools only after their real connection and scopes are verified. Mac and cloud are distinct environments.
+
+Before supporting development work, add execution idempotency across tools, exclusive workspace reservations or isolated worktrees, bounded grants, result provenance and explicit reconciliation of unknown runs. Existing cron jobs must remain owned by their current system and must not be recreated by the Hub. Terminal events do not automatically submit another task. Cursor Cloud Agents and a Grok Bot external control interface are distinct capabilities; one does not establish access to the other. The first release still admits only the fixed connectivity task.
