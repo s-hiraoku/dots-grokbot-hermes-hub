@@ -200,6 +200,8 @@ const policySchema = z
   })
   .strict();
 export type InventoryPolicy = z.infer<typeof policySchema>;
+// Shared structural contract for offline launch preparation; validation is not live evidence.
+export { policySchema as inventoryPolicySchema };
 export interface InventoryProcess {
   pid: number;
   uid: number;
