@@ -6,11 +6,27 @@ HABは、個人文脈を持つDots（スタローン）、クラウドで働くG
 
 ## 全体図
 
-2026-10-10時点。**実線は既存設定・接続の本人報告、破線は計画・未接続**です。青い枠はコード実装済みで、本番稼働を意味しません。既存model MCPとHAB Hubは別サービスです。
+2026-10-10時点の**確認済み経路（本人報告）**です。既存model MCPはHAB Hubとは別サービスです。モデル一覧取得・認証なし拒否の報告は、Hub接続やmodel実行・費用枠の確認を意味しません。
 
-![HABの最新概要図。既存GrokとFunnel/model MCPは本人報告で接続済み。Dots、Auth0、HAB Hub、Hermesの今回の実接続は未完。](docs/diagrams/hab-overview.png)
+<!-- hab-diagram: hab-current -->
 
-[通信方向・認証責任の詳細図と確認範囲](docs/hab-topology.md) · [拡大用SVG](docs/diagrams/hab-overview.svg) · [Mermaidソース](docs/diagrams/hab-overview.mmd)
+```mermaid
+%%{init: {"theme":"neutral","look":"classic","flowchart":{"curve":"linear","wrappingWidth":280}}}%%
+flowchart LR
+  G["Grok Bot<br/>Cloud Worker"]
+  F["Tailscale Funnel<br/>Public HTTPS / 443"]
+  subgraph MAC["Mac mini"]
+    M["Existing model MCP / 8765<br/>Not HAB Hub"]
+  end
+  G <-->|"MCP request / response"| F
+  F <-->|"Existing /mcp proxy"| M
+  classDef confirmed fill:#ecfdf5,stroke:#15803d,color:#0f172a
+  class G,F,M confirmed
+```
+
+[PNG fallback](docs/diagrams/hab-current.png) · [HABの目標構成・通信方向・認証責任](docs/hab-topology.md)
+
+Hub・Hermesの限定接続は準備段階、Dots/ChatGPT MCPは未検証です。目標構成は詳細文書で確認済み経路から分けて示します。
 
 ## 現在可能なこと
 
