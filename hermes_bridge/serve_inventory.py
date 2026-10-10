@@ -5,6 +5,10 @@ runtime-injected API_SERVER_KEY. Does not create credentials or profile files.
 """
 
 import asyncio
+import ctypes
+import errno
+import importlib.machinery
+import re
 import hashlib
 import json
 import os
@@ -56,6 +60,8 @@ def validate_manifest(manifest, *, profile, wrapper, python, credential_digest):
         "endpoint": "http://127.0.0.1:8645/",
         "profileRoot": str(profile),
         "sourceRoot": manifest.get("sourceRoot"),
+        "dependencyRoot": manifest.get("dependencyRoot"),
+        "pythonIsolation": "isolated-no-site-v1",
         "wrapperPath": str(wrapper),
         "pythonPath": str(python),
         "model": MODEL,
@@ -96,16 +102,173 @@ def validate_manifest(manifest, *, profile, wrapper, python, credential_digest):
         )
     ):
         raise ValueError("inventory_code_closure_rejected")
+    validate_import_contract(manifest)
     if manifest != expected or len(credential_digest) != 64:
         raise ValueError("inventory_manifest_rejected")
     return expected
 
 
+def validate_import_contract(manifest):
+    trees = manifest["codeTrees"]
+    dependency = manifest.get("dependencyRoot")
+    if (
+        not isinstance(dependency, str)
+        or not Path(dependency).is_absolute()
+        or str(Path(dependency).resolve()) != dependency
+        or "site-packages" in Path(dependency).parts
+        or manifest.get("pythonIsolation") != "isolated-no-site-v1"
+        or any(
+            dependency == root
+            or dependency.startswith(root + "/")
+            or root.startswith(dependency + "/")
+            for root in (
+                manifest.get("sourceRoot", ""),
+                str(Path(manifest.get("wrapperPath", "/unmeasured/guard")).parent),
+            )
+        )
+    ):
+        raise ValueError("inventory_dependency_policy_rejected")
+    roots = []
+    total = 0
+    for tree in trees:
+        if not isinstance(tree, dict) or set(tree) - {
+            "root",
+            "sha256",
+            "systemRuntime",
+            "fixedDependencies",
+            "maxBytes",
+            "aliases",
+            "reviewedResources",
+            "excludedSystemSitePackages",
+        }:
+            raise ValueError("inventory_tree_policy_rejected")
+        root = tree.get("root")
+        size = tree.get("maxBytes", 536870912)
+        if (
+            not isinstance(root, str)
+            or not Path(root).is_absolute()
+            or str(Path(root).resolve()) != root
+            or not isinstance(tree.get("sha256"), str)
+            or not re.fullmatch(r"[a-f0-9]{64}", tree["sha256"])
+            or type(size) is not int
+            or not 0 < size <= 1073741824
+            or any(
+                name in tree and type(tree[name]) is not bool
+                for name in ("systemRuntime", "fixedDependencies")
+            )
+        ):
+            raise ValueError("inventory_tree_policy_rejected")
+        total += size
+        roots.append(root)
+        excluded = tree.get("excludedSystemSitePackages")
+        if excluded is not None and (
+            not isinstance(excluded, str)
+            or not re.fullmatch(r"python3\.\d+/site-packages", excluded)
+            or not tree.get("systemRuntime")
+            or not root.endswith("/lib")
+        ):
+            raise ValueError("inventory_site_exclusion_rejected")
+        resources = tree.get("reviewedResources", [])
+        if (
+            not isinstance(resources, list)
+            or len(resources) > 8
+            or any(
+                not isinstance(item, str)
+                or not item
+                or item.startswith("/")
+                or ".." in item.split("/")
+                or item.split("/")[-1] not in {"logs", "runtime", "secrets"}
+                for item in resources
+            )
+        ):
+            raise ValueError("inventory_tree_policy_rejected")
+        if tree.get("fixedDependencies") and (
+            root != dependency or tree.get("systemRuntime")
+        ):
+            raise ValueError("inventory_dependency_policy_rejected")
+        if root != dependency and (
+            dependency.startswith(root + "/") or root.startswith(dependency + "/")
+        ):
+            raise ValueError("inventory_dependency_policy_rejected")
+    if (
+        total > 2147483648
+        or len(set(roots)) != len(roots)
+        or not any(
+            tree["root"] == dependency
+            and tree.get("fixedDependencies") is True
+            and not tree.get("systemRuntime")
+            for tree in trees
+        )
+    ):
+        raise ValueError("inventory_dependency_policy_rejected")
+    excluded_roots = [
+        str(Path(t["root"]) / t["excludedSystemSitePackages"])
+        for t in trees
+        if t.get("excludedSystemSitePackages")
+    ]
+    for tree in trees:
+        aliases = tree.get("aliases", {})
+        if not isinstance(aliases, dict) or (
+            "aliases" in tree and not tree.get("systemRuntime")
+        ):
+            raise ValueError("inventory_tree_policy_rejected")
+        for relative, target in aliases.items():
+            if (
+                not isinstance(relative, str)
+                or not relative
+                or relative.startswith("/")
+                or ".." in relative.split("/")
+                or not isinstance(target, str)
+                or not Path(target).is_absolute()
+                or str(Path(target).resolve()) != target
+                or not any(
+                    t.get("systemRuntime")
+                    and (target == t["root"] or target.startswith(t["root"] + "/"))
+                    for t in trees
+                )
+                or any(
+                    target == root or target.startswith(root + "/")
+                    for root in excluded_roots
+                )
+            ):
+                raise ValueError("inventory_code_symlink_rejected")
+    if any(
+        root == other or root.startswith(other + "/")
+        for root in roots
+        for other in excluded_roots
+    ):
+        raise ValueError("inventory_site_exclusion_rejected")
+
+
+def verify_python_bootstrap():
+    # -I alone still runs site/.pth before the wrapper can inspect anything.
+    if not sys.flags.isolated or not sys.flags.no_site or "site" in sys.modules:
+        raise ValueError("inventory_python_bootstrap_rejected")
+    expected = [
+        importlib.machinery.BuiltinImporter,
+        importlib.machinery.FrozenImporter,
+        importlib.machinery.PathFinder,
+    ]
+    if sys.meta_path != expected:
+        raise ValueError("inventory_python_import_hook_rejected")
+
+
+def require_not_writable(path):
+    # os.access(False) loses errno and would also accept an inconclusive EPERM.
+    access = ctypes.CDLL(None, use_errno=True).access
+    access.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    access.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    if access(os.fsencode(path), os.W_OK) == 0:
+        raise ValueError("inventory_mutable_code_rejected")
+    reason = ctypes.get_errno()
+    if reason != errno.EACCES:
+        raise OSError(reason, "inventory_write_probe_inconclusive")
+
+
 def verify_code_trees(trees):
     """Hash reviewed immutable public code closure before importing Hermes."""
     for tree in trees:
-        if tree.get("excludedSystemSitePackages"):
-            raise ValueError("inventory_unmeasured_system_packages_rejected")
         root = Path(tree["root"])
         if not root.is_absolute() or str(root.resolve()) != str(root):
             raise ValueError("inventory_code_root_rejected")
@@ -115,12 +278,11 @@ def verify_code_trees(trees):
         def walk(path, relative):
             before = path.lstat()
             totals[0] += 1
-            if (
-                totals[0] > 100000
-                or os.access(path, os.W_OK)
-                or (not tree.get("systemRuntime") and before.st_mode & 0o222)
+            if totals[0] > 100000 or (
+                not tree.get("systemRuntime") and before.st_mode & 0o222
             ):
                 raise ValueError("inventory_mutable_code_rejected")
+            require_not_writable(path)
             if tree.get("systemRuntime") and before.st_uid != 0:
                 raise ValueError("inventory_system_owner_rejected")
             alias = (
@@ -153,6 +315,12 @@ def verify_code_trees(trees):
                         and sub not in tree.get("reviewedResources", [])
                     ):
                         raise ValueError("inventory_private_code_root_rejected")
+                    if tree.get("fixedDependencies") and (
+                        child.name.endswith((".pth", ".egg-link"))
+                        or child.name.startswith("__editable__")
+                        or child.name == "direct_url.json"
+                    ):
+                        raise ValueError("inventory_dependency_loader_rejected")
                     if tree.get("systemRuntime") and sub == tree.get(
                         "excludedSystemSitePackages"
                     ):
@@ -196,17 +364,27 @@ def verify_code_trees(trees):
 
 def verify_import_paths(paths, trees):
     roots = [Path(tree["root"]).resolve() for tree in trees]
+    excluded = [
+        Path(t["root"]) / t["excludedSystemSitePackages"]
+        for t in trees
+        if t.get("excludedSystemSitePackages")
+    ]
     for entry in paths:
         if not entry or not Path(entry).is_absolute():
             raise ValueError("inventory_implicit_import_path_rejected")
         path = Path(entry).resolve()
+        if "site-packages" in path.parts or any(
+            path == root or path.is_relative_to(root) for root in excluded
+        ):
+            raise ValueError("inventory_shared_site_path_rejected")
         if not any(path == root or path.is_relative_to(root) for root in roots):
             raise ValueError("inventory_unmeasured_import_path_rejected")
 
 
 async def main():
     # Deliberately no CLI fields/tasks/paths to widen the reviewed launch contract.
-    if len(sys.argv) != 1 or not sys.flags.isolated:
+    verify_python_bootstrap()
+    if len(sys.argv) != 1:
         raise ValueError("inventory_launch_arguments_rejected")
     if (
         PROFILE.is_symlink()
@@ -239,6 +417,9 @@ async def main():
     verify_import_paths(sys.path, manifest["codeTrees"])
     verify_code_trees(manifest["codeTrees"])
     sys.dont_write_bytecode = True
+    # Never invoke site.addsitedir: dependencies are fixed wheels, not executable
+    # .pth/editable loaders. Every added path has an exact measured tree.
+    sys.path.insert(0, manifest["dependencyRoot"])
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from inventory_agent import EvidenceStore, load_official_adapter
 
@@ -246,6 +427,8 @@ async def main():
     os.environ["HERMES_PROFILE"] = "hub-inventory-once"
     os.chdir(PROFILE / "empty-workdir")
     sys.path.insert(0, manifest["sourceRoot"])
+    verify_import_paths(sys.path, manifest["codeTrees"])
+    verify_python_bootstrap()
     from hermes_constants import set_hermes_home_override
 
     set_hermes_home_override(PROFILE)
@@ -255,6 +438,8 @@ async def main():
     api_class = load_official_adapter(
         store, workdir=PROFILE / "empty-workdir", expected_home=PROFILE
     )
+    verify_import_paths(sys.path, manifest["codeTrees"])
+    verify_python_bootstrap()
     api = api_class(
         PlatformConfig(
             enabled=True,

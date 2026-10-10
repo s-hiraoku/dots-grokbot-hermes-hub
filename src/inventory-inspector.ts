@@ -33,6 +33,7 @@ const stableJSON = (value: unknown) => JSON.stringify(normalized(value));
 const treeOptions = z
   .object({
     systemRuntime: z.boolean().optional(),
+    fixedDependencies: z.boolean().optional(),
     maxBytes: z.number().int().positive().max(1073741824).optional(),
     aliases: z.record(z.string(), z.string()).optional(),
     reviewedResources: z
@@ -110,6 +111,14 @@ export async function measureCodeTree(
             ))
         )
           throw new Error("inventory_code_root_contains_private_data");
+        if (
+          settings.fixedDependencies &&
+          (name.endsWith(".pth") ||
+            name.endsWith(".egg-link") ||
+            name.startsWith("__editable__") ||
+            name === "direct_url.json")
+        )
+          throw new Error("inventory_dependency_loader_rejected");
         const child = join(path, name),
           sub = relative ? `${relative}/${name}` : name;
         if (
@@ -153,6 +162,8 @@ const policySchema = z
     namespaceLabel: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
     profileRoot: z.string(),
     sourceRoot: z.string(),
+    dependencyRoot: z.string(),
+    pythonIsolation: z.literal("isolated-no-site-v1"),
     wrapperPath: z.string(),
     pythonPath: z.string(),
     processInterpreterPath: z.string().optional(),
@@ -297,21 +308,57 @@ export class InventoryInspector {
       !policy.codeTrees.some(
         (tree) => tree.root === dirname(policy.wrapperPath),
       ) ||
-      !policy.codeTrees.some((tree) =>
-        policy.pythonPath.startsWith(`${tree.root}/`),
+      !policy.codeTrees.some(
+        (tree) =>
+          policy.pythonPath === tree.root ||
+          policy.pythonPath.startsWith(`${tree.root}/`),
       ) ||
       (policy.processInterpreterPath !== undefined &&
         !policy.codeTrees.some(
           (tree) =>
             tree.systemRuntime && tree.root === policy.processInterpreterPath,
         )) ||
-      policy.codeTrees.some(
-        (tree) =>
-          resolve(tree.root) !== tree.root ||
-          tree.excludedSystemSitePackages !== undefined,
-      )
+      policy.codeTrees.some((tree) => resolve(tree.root) !== tree.root)
     )
       throw new Error("inventory_policy_rejected");
+    if (
+      new Set(policy.codeTrees.map((tree) => tree.root)).size !==
+        policy.codeTrees.length ||
+      resolve(policy.dependencyRoot) !== policy.dependencyRoot ||
+      [policy.sourceRoot, dirname(policy.wrapperPath)].some(
+        (root) =>
+          policy.dependencyRoot === root ||
+          policy.dependencyRoot.startsWith(`${root}/`) ||
+          root.startsWith(`${policy.dependencyRoot}/`),
+      ) ||
+      policy.dependencyRoot.split("/").includes("site-packages") ||
+      !policy.codeTrees.some(
+        (tree) =>
+          tree.root === policy.dependencyRoot &&
+          tree.fixedDependencies === true &&
+          !tree.systemRuntime,
+      ) ||
+      policy.codeTrees.some(
+        (tree) =>
+          (tree.fixedDependencies &&
+            (tree.root !== policy.dependencyRoot || tree.systemRuntime)) ||
+          (tree.root !== policy.dependencyRoot &&
+            (policy.dependencyRoot.startsWith(`${tree.root}/`) ||
+              tree.root.startsWith(`${policy.dependencyRoot}/`))),
+      )
+    )
+      throw Error("inventory_dependency_policy_rejected");
+    const excludedRoots = policy.codeTrees
+      .filter((tree) => tree.excludedSystemSitePackages)
+      .map((tree) => join(tree.root, tree.excludedSystemSitePackages!));
+    if (
+      policy.codeTrees.some((tree) =>
+        excludedRoots.some(
+          (root) => tree.root === root || tree.root.startsWith(`${root}/`),
+        ),
+      )
+    )
+      throw Error("inventory_policy_rejected");
     for (const tree of policy.codeTrees) {
       if (tree.aliases && !tree.systemRuntime)
         throw new Error("inventory_policy_rejected");
@@ -421,6 +468,8 @@ export class InventoryInspector {
         endpoint: this.endpoint,
         profileRoot: p.profileRoot,
         sourceRoot: p.sourceRoot,
+        dependencyRoot: p.dependencyRoot,
+        pythonIsolation: p.pythonIsolation,
         wrapperPath: p.wrapperPath,
         pythonPath: p.pythonPath,
         model: "gpt-6.1-sol",
@@ -482,7 +531,7 @@ export class InventoryInspector {
       !Number.isFinite(observed.startedAt) ||
       observed.startedAt > this.#now() ||
       observed.command !==
-        `${p.processInterpreterPath ?? p.pythonPath} -I ${p.wrapperPath}` ||
+        `${p.processInterpreterPath ?? p.pythonPath} -I -S ${p.wrapperPath}` ||
       observed.sourceCommit !== p.sourceCommit ||
       observed.listeners.length !== 1 ||
       observed.listeners[0] !== `127.0.0.1:${url.port}`
@@ -493,6 +542,7 @@ export class InventoryInspector {
       if (
         (await measureCodeTree(tree.root, observed.startedAt, {
           systemRuntime: tree.systemRuntime,
+          fixedDependencies: tree.fixedDependencies,
           maxBytes: tree.maxBytes,
           aliases: tree.aliases,
           reviewedResources: tree.reviewedResources,

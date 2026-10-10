@@ -20,9 +20,11 @@ export async function inventoryPolicyFixture(endpoint) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "hub-inspector-")));
   const profileRoot = join(root, "profile"),
     sourceRoot = join(root, "source"),
+    dependencyRoot = join(root, "dependencies"),
     wrapperPath = join(sourceRoot, "reviewed-guard.py");
   await mkdir(profileRoot, { mode: 0o700 });
   await mkdir(sourceRoot, { mode: 0o700 });
+  await mkdir(dependencyRoot, { mode: 0o500 });
   // Non-executable public dummy policy/files; process observation is injected, never launched.
   const guard = "fixture reviewed guard";
   const config = "fixture reviewed nonsecret config";
@@ -68,10 +70,19 @@ export async function inventoryPolicyFixture(endpoint) {
     namespaceLabel: "fixture-pilot-generation",
     profileRoot,
     sourceRoot,
+    dependencyRoot,
+    pythonIsolation: "isolated-no-site-v1",
     wrapperPath,
     pythonPath,
     pythonSHA256: sha(python),
     codeTrees: [
+      {
+        root: dependencyRoot,
+        sha256: await measureCodeTree(dependencyRoot, Infinity, {
+          fixedDependencies: true,
+        }),
+        fixedDependencies: true,
+      },
       {
         root: sourceRoot,
         sha256: await measureCodeTree(sourceRoot),
@@ -96,6 +107,8 @@ export async function inventoryPolicyFixture(endpoint) {
     endpoint,
     profileRoot,
     sourceRoot,
+    dependencyRoot,
+    pythonIsolation: "isolated-no-site-v1",
     wrapperPath,
     pythonPath,
     model: "gpt-6.1-sol",
@@ -125,7 +138,7 @@ export async function inventoryPolicyFixture(endpoint) {
     pid: 12345,
     uid: process.getuid(),
     startedAt,
-    command: `${policy.pythonPath} -I ${wrapperPath}`,
+    command: `${policy.pythonPath} -I -S ${wrapperPath}`,
     listeners: [`127.0.0.1:${new URL(endpoint).port}`],
     sourceCommit: HERMES_COMMIT,
   };
@@ -147,6 +160,7 @@ export async function inventoryPolicyFixture(endpoint) {
     },
     cleanup: async () => {
       await chmod(sourceRoot, 0o700);
+      await chmod(dependencyRoot, 0o700);
       await rm(root, { recursive: true, force: true });
     },
   };
