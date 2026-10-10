@@ -293,3 +293,52 @@ test("D1 fixed bidirectional diagnostic contract", async (t) => {
     await mf.dispose();
   }
 });
+test("D1 token broker atomic account budget fences competing instances", async () => {
+  const { TokenBroker } = await import("../src/token-broker.ts");
+  const mf = new Miniflare(options("dist/worker.js"));
+  try {
+    const db = await mf.getD1Database("DB");
+    await migrate(db);
+    const h = new D1Hub(db);
+    let calls = 0;
+    const p = {
+        subject: "fixture-service",
+        clientId: "fixture-client",
+        operations: [],
+      },
+      period = { id: "fixture-month", start: 0, end: 10000000, ceiling: 1 };
+    const acquire = async () => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 20));
+      return { access_token: "fixture-token", expires_in: 60 };
+    };
+    const brokers = [
+      new TokenBroker(
+        h.authorization,
+        p,
+        period,
+        acquire,
+        undefined,
+        () => 1000,
+      ),
+      new TokenBroker(
+        h.authorization,
+        p,
+        period,
+        acquire,
+        undefined,
+        () => 1000,
+      ),
+    ];
+    const results = await Promise.allSettled(brokers.map((b) => b.token()));
+    assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+    assert.equal(calls, 1);
+    assert.equal(
+      (await h.driver.batch([{ sql: "SELECT used FROM token_budget" }]))[0][0]
+        .used,
+      1,
+    );
+  } finally {
+    await mf.dispose();
+  }
+});

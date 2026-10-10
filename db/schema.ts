@@ -248,3 +248,27 @@ export const diagnosticAudit = sqliteTable("diagnostic_audit", {
   state: text().notNull(),
   at: integer().notNull(),
 });
+
+export const tokenBudget = sqliteTable(
+  "token_budget",
+  {
+    period: text("period").primaryKey(),
+    start: integer("start").notNull(),
+    end: integer("end").notNull(),
+    ceiling: integer("ceiling").notNull(),
+    used: integer("used").notNull().default(0),
+    state: text("state").notNull(),
+    attempt: text("attempt"),
+  },
+  (t) => [
+    check(
+      "token_budget_limit",
+      sql`${t.ceiling} BETWEEN 1 AND 1000 AND ${t.used} BETWEEN 0 AND ${t.ceiling}`,
+    ),
+    check("token_budget_period", sql`${t.end}>${t.start}`),
+    check(
+      "token_budget_state",
+      sql`${t.state} IN ('open','attempting','parked')`,
+    ),
+  ],
+);

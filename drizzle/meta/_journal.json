@@ -57,6 +57,13 @@
       "when": 1791589403339,
       "tag": "0007_bidirectional_ping",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791591885050,
+      "tag": "0008_token_budget",
+      "breakpoints": true
     }
   ]
 }
