@@ -53,11 +53,18 @@ export class TokenBroker {
       const cache = this.#cache;
       const ledger = await this.gate.batch(p, [
         {
-          sql: "SELECT state FROM token_budget WHERE period=?",
+          sql: "SELECT state,start,end,ceiling FROM token_budget WHERE period=?",
           params: [this.period.id],
         },
       ]);
-      if (ledger[0][0]?.state === "parked") {
+      const row = ledger[0][0];
+      if (
+        !row ||
+        !["open", "attempting"].includes(String(row.state)) ||
+        row.start !== this.period.start ||
+        row.end !== this.period.end ||
+        row.ceiling !== this.period.ceiling
+      ) {
         this.#cache = undefined;
         this.notify("budget_or_attempt_blocked");
         throw Error("budget_or_attempt_blocked");

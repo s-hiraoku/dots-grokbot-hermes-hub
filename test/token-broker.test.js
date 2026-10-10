@@ -363,3 +363,27 @@ test("sticky period stop blocks another instance's cached token", async () => {
     h.close();
   }
 });
+
+test("missing authoritative ledger denies cached token", async () => {
+  const h = new Hub();
+  let calls = 0;
+  try {
+    const a = new TokenBroker(
+      h.authorization,
+      p,
+      period,
+      async () => {
+        calls++;
+        return { access_token: "fixture-token", expires_in: 60 };
+      },
+      undefined,
+      () => 1000,
+    );
+    await a.token();
+    await h.driver.batch([{ sql: "DELETE FROM token_budget" }]);
+    await assert.rejects(a.token(), /budget_or_attempt_blocked/);
+    assert.equal(calls, 1);
+  } finally {
+    h.close();
+  }
+});
