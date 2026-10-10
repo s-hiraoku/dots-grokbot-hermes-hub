@@ -1,5 +1,9 @@
 # Local one-task Hermes API key lifecycle
 
+The opt-in [one-shot factory](inventory-one-shot.md) now implements private
+artifact writes, owned child lifecycle and the Inspector/Runs/Adapter connection.
+It has no automatic entrypoint; implementation is separate from live authorization.
+
 The Hub now includes an opt-in local provisioner and the reviewed candidate Hermes inventory Runs/inspector bridge. None is connected to a default entrypoint. Auth0 JWTs and model account credentials are separate from this local API bearer. Mock tests inject deterministic entropy and do not generate a real service key, start installed Hermes, open an API socket or call a model.
 
 `LocalHermesKey` defaults to cryptographic 32-byte randomness, encoded as 64 hex characters. Only trusted local child/adapter factory callbacks receive the bearer. SHA256 of that hex string matches the candidate launcher's `credential.scope` check. The persistence callback receives only fingerprint, fixed purpose, expiry and issued/revoked/stop_failed state. No key is put in task/result, DB, logs, argv or files by this component. Production factories must use private runtime injection, never command arguments or inherited broad credentials; they are not implemented by the helper.
