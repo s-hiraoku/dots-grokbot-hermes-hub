@@ -11,3 +11,5 @@ logs/
 dist/
 .sites-runtime/
 .wrangler/
+
+config/*.local.json

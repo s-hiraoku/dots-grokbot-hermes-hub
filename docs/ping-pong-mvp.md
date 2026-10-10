@@ -4,7 +4,7 @@ This local-only diagnostic is separate from Hermes tasks. It is not a production
 
 ## Contract and authority
 
-The four MCP operations are `ping_submit`, `ping_get`, `ping_reply`, and `ping_pending`. Each pilot client requires those four dedicated scopes; legacy task execution scopes are unnecessary. Two operator-configured subject/client pairs identify Dots and Grok. Clients must differ; subjects may match. Claims must come from verified authentication, not tool arguments. Connections shared by an account do not establish exclusive bot identity.
+The four MCP operations are `ping_submit`, `ping_get`, `ping_reply`, and `ping_pending`. Each pilot client requires those four dedicated scopes; legacy task execution scopes are unnecessary. Two operator-configured subject/client pairs identify Dots and Grok. Clients must differ; the PingService contract permits subjects to match, but the current upstream authorization registry is subject-unique. Offline preflight rejects shared subjects until that registry is extended and tested. Claims must come from verified authentication, not tool arguments. Connections shared by an account do not establish exclusive bot identity.
 
 Only literal `ping` and `pong` are accepted. The server chooses the opposite peer. There is no shell, arbitrary message, destination URL, or personal-data field. Requests have server-generated IDs/correlation IDs, a 1–300 second TTL, and a sender-scoped request key. At most ten active requests per sender/client are allowed. This is an active-request limit, not historical retention or a complete rate limiter.
 
