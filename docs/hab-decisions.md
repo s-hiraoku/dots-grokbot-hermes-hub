@@ -45,10 +45,13 @@ repoは別管理を維持します。実装接続は未着手です。
   permissions変更、window upload、history delete、demo seedにも到達する。
   「読み取り専用token」とは言えない。Hubに秘密を伝送せず、trusted local adapterの専用能力境界と
   明示subject/client→tenant対応が必要。必要ならShiftLog側のreadonly credential追加案を先に報告する。
-  新規credential発行・別repo変更はまだ行わない。
+  collectionのON/OFFは履歴readの認可ではなく、現read routeはcollection停止時も過去記憶を返し得る。
+  agentへの共有許可はHub側で別に明示し、停止・取り消しを確認する。新規credential発行・別repo変更はまだ行わない。
 - **書き込み境界**：収集ON/OFF、許可list、upload、削除、demo seed、既存collector/cron/launchdは
   この統合では呼ばない。ShiftLogのデータ所有・削除を維持する。Hubへの長期複製は作らず、
   後日の削除を過去task/resultやagent記憶へどう反映するかは接続前に決める。
+  ただし既存read requestにもHTTP監査logが生じ、tenant hydrationは期限切れraw/10分記憶のpurgeと
+  persistenceを行い得る。API全体が書込みゼロとは言わず、この既存retention副作用を接続時に説明する。
 - **機密性**：記憶はtitle/body/apps/site/projectとrepo/PR/Slack/URL/file entityを含み得る。
   maskingがあっても個人の活動履歴であり、公開repo・監査log・outboxに本文を入れない。
   Dots/Grok/providerへどの範囲を送るかは接続先ごとに本人が選ぶ。取得内容は非信頼contextとして扱い、
