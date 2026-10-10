@@ -396,13 +396,18 @@ export class InventoryInspector {
     this.#probe = options.probe ?? observeInventory;
     this.#now = options.now ?? Date.now;
   }
-  private async owned(path: string, directory = false, secret = false) {
+  private async owned(
+    path: string,
+    directory = false,
+    secret = false,
+    system = false,
+  ) {
     const stat = await lstat(path);
     if (
       stat.isSymbolicLink() ||
       (!directory && !stat.isFile()) ||
       (directory && !stat.isDirectory()) ||
-      stat.uid !== process.getuid?.() ||
+      stat.uid !== (system ? 0 : process.getuid?.()) ||
       stat.mode & 0o022 ||
       (secret && stat.mode & 0o077) ||
       (await realpath(path)) !== path
@@ -410,8 +415,8 @@ export class InventoryInspector {
       throw new Error("inventory_file_boundary_rejected");
     return stat;
   }
-  private async ownedBytes(path: string, maxBytes = 1048576) {
-    const before = await this.owned(path);
+  private async ownedBytes(path: string, maxBytes = 1048576, system = false) {
+    const before = await this.owned(path, false, false, system);
     if (before.size > maxBytes) throw Error("inventory_file_boundary_rejected");
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
@@ -424,7 +429,7 @@ export class InventoryInspector {
       )
         throw Error("inventory_integrity_rejected");
       const bytes = await handle.readFile();
-      const after = await this.owned(path);
+      const after = await this.owned(path, false, false, system);
       if (
         bytes.length > maxBytes ||
         before.ino !== after.ino ||
@@ -437,8 +442,13 @@ export class InventoryInspector {
       await handle.close();
     }
   }
-  private async pinnedFile(path: string, sha: string, maxBytes = 1048576) {
-    const result = await this.ownedBytes(path, maxBytes);
+  private async pinnedFile(
+    path: string,
+    sha: string,
+    maxBytes = 1048576,
+    system = false,
+  ) {
+    const result = await this.ownedBytes(path, maxBytes, system);
     if (digest(result.bytes) !== sha)
       throw Error("inventory_integrity_rejected");
     return result;
@@ -539,7 +549,17 @@ export class InventoryInspector {
       observed.listeners[0] !== `127.0.0.1:${url.port}`
     )
       throw new Error("inventory_process_boundary_rejected");
-    const python = await this.pinnedFile(p.pythonPath, p.pythonSHA256);
+    const python = await this.pinnedFile(
+      p.pythonPath,
+      p.pythonSHA256,
+      1048576,
+      p.codeTrees.some(
+        (tree) =>
+          tree.systemRuntime &&
+          (p.pythonPath === tree.root ||
+            p.pythonPath.startsWith(`${tree.root}/`)),
+      ),
+    );
     for (const tree of p.codeTrees)
       if (
         (await measureCodeTree(tree.root, observed.startedAt, {

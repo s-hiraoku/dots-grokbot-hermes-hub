@@ -9,6 +9,7 @@ import {
   InventoryInspector,
   observeInventory,
   type InventoryPolicy,
+  type ProcessProbe,
 } from "./inventory-inspector.ts";
 import { HermesAgentInventoryRuns } from "./hermes-agent-inventory-runs.ts";
 import { LocalHermesKey, type KeyRecord } from "./local-hermes-key.ts";
@@ -172,6 +173,7 @@ export class InventoryChild {
 
 export type InventoryFactoryOptions = {
   reviewed: ConstructorParameters<typeof InventoryLaunchPlan>[0];
+  signal?: AbortSignal;
   /** Trusted enrollment boundary supplies an already authenticated Hub client.
    * It must bind this fresh runner scope; no credential issuance or auth bypass here.
    */
@@ -186,6 +188,7 @@ type Dependencies = {
   connect?: (
     options: Parameters<typeof HermesAgentInventoryRuns.connect>[0],
   ) => Promise<Runs>;
+  probe?: ProcessProbe;
 };
 /** Opt-in one-shot composition. Calling this is a live action requiring separate
  * approval. Test dependencies are trusted in-process seams, never request arguments.
@@ -196,6 +199,12 @@ export async function runInventoryOnce(
 ) {
   const lifetime = new LocalHermesKey();
   const controller = new AbortController();
+  options.signal?.throwIfAborted();
+  const externalStop = () => {
+    controller.abort();
+    void lifetime.close().catch(() => {});
+  };
+  options.signal?.addEventListener("abort", externalStop, { once: true });
   let plan: InventoryLaunchPlan, policy: InventoryPolicy, child: InventoryChild;
   let journal: Journal | undefined;
   let task: Promise<string | null> | undefined;
@@ -226,6 +235,9 @@ export async function runInventoryOnce(
           recordPath = join(policy.profileRoot, "inventory-key-record.json");
           await exclusiveFile(recordPath, `${JSON.stringify(record)}\n`);
           recordIdentity = identity(await lstat(recordPath));
+          // ps reports seconds, not filesystem subsecond times. All pinned files
+          // must predate the earliest observable process-start instant.
+          await pause(1050 - (Date.now() % 1000));
           return;
         }
         if (!recordIdentity) return; // No live boundaries exist after failed preparation.
@@ -296,7 +308,10 @@ export async function runInventoryOnce(
             probe: async (observedPid, source) => {
               if (observedPid !== pid || child.exited)
                 throw Error("inventory_child_pid_mismatch");
-              return observeInventory(observedPid, source);
+              return (dependencies.probe ?? observeInventory)(
+                observedPid,
+                source,
+              );
             },
           });
           const runs = await (
@@ -327,7 +342,7 @@ export async function runInventoryOnce(
             binding.principal,
             runs,
             journal,
-          ).once(controller.signal);
+          ).run(controller.signal);
         })();
         void task.then(
           () => {
@@ -354,6 +369,7 @@ export async function runInventoryOnce(
   } catch {
     throw Error("inventory_one_shot_failed_requires_reconciliation");
   } finally {
+    options.signal?.removeEventListener("abort", externalStop);
     try {
       await lifetime.close();
     } finally {

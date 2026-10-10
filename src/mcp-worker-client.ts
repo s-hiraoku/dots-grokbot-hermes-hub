@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { schemas } from "./mcp-core.ts";
 import { validMcpPath } from "./oauth.ts";
+import { canonicalResult } from "./task-contract.ts";
 import {
   RESPONSE,
   RUN_ID_PATTERN,
@@ -34,26 +35,46 @@ const task = z.object({
   at: z.number().int(),
 });
 
-/** Outbound loopback client for the fixed-text worker. No discovery, issuance or retries.
+export const INVENTORY_ONE_SHOT_KEY = "hab-inventory-one-shot-v1";
+const inventoryTask = task.extend({
+  task_type: z.literal("shift_log_inventory"),
+  request_key: z.literal(INVENTORY_ONE_SHOT_KEY),
+  result: z
+    .string()
+    .max(4096)
+    .refine(
+      (value) =>
+        value === "shift_log_inventory_failed" ||
+        canonicalResult("shift_log_inventory", value) === value,
+    )
+    .nullable(),
+});
+type ClientOptions = {
+  endpoint: string;
+  authorization: () => Promise<string>;
+  fetch?: typeof fetch;
+  timeoutMs?: number;
+};
+/** Bounded shared transport. Contracts are selected only by fixed exported classes.
  * Principal arguments satisfy Adapter's local contract; never transmit agent/subject labels.
  * The server resolves authority solely from the supplied access token.
  */
-export class MCPWorkerClient implements HubClient {
+class MCPTaskClient implements HubClient {
   #endpoint: string;
   #authorization: () => Promise<string>;
   #fetch: typeof fetch;
   #timeoutMs: number;
   #id = 0;
-  constructor(options: {
-    endpoint: string;
-    authorization: () => Promise<string>;
-    fetch?: typeof fetch;
-    timeoutMs?: number;
-  }) {
+  #task: z.ZodType<Task>;
+  protected constructor(
+    options: ClientOptions,
+    host: string,
+    parser: z.ZodType<Task>,
+  ) {
     const url = new URL(options.endpoint);
     if (
       url.protocol !== "http:" ||
-      url.host !== "127.0.0.1:8787" ||
+      url.host !== host ||
       url.username ||
       url.password ||
       url.search ||
@@ -63,6 +84,7 @@ export class MCPWorkerClient implements HubClient {
     )
       throw Error("worker_endpoint_rejected");
     this.#endpoint = options.endpoint;
+    this.#task = parser;
     this.#authorization = options.authorization;
     this.#fetch = options.fetch ?? fetch;
     this.#timeoutMs = z
@@ -72,8 +94,8 @@ export class MCPWorkerClient implements HubClient {
       .max(3000)
       .parse(options.timeoutMs ?? 2000);
   }
-  async #call(
-    name: "claim" | "get" | "heartbeat" | "complete",
+  protected async call(
+    name: "submit" | "claim" | "get" | "heartbeat" | "complete",
     args: unknown,
   ): Promise<Task | null> {
     const controller = new AbortController();
@@ -96,7 +118,7 @@ export class MCPWorkerClient implements HubClient {
     }
   }
   async #perform(
-    name: "claim" | "get" | "heartbeat" | "complete",
+    name: "submit" | "claim" | "get" | "heartbeat" | "complete",
     args: unknown,
     signal: AbortSignal,
   ): Promise<Task | null> {
@@ -171,25 +193,62 @@ export class MCPWorkerClient implements HubClient {
       .parse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
     const value = JSON.parse(envelope.result.content[0].text);
     if (name === "claim" && value === null) return null;
-    return task.parse(value);
+    return this.#task.parse(value);
   }
   claim(p: Principal, args: Record<string, never>) {
     void p;
-    return this.#call("claim", args);
+    return this.call("claim", args);
   }
   async get(p: Principal, args: { id: string }) {
     void p;
-    return (await this.#call("get", args))!;
+    return (await this.call("get", args))!;
   }
   async heartbeat(p: Principal, args: Lease & { run_id?: string }) {
     void p;
-    return (await this.#call("heartbeat", args))!;
+    return (await this.call("heartbeat", args))!;
   }
   async complete(
     p: Principal,
     args: Lease & { state: "succeeded" | "failed"; result: string },
   ) {
     void p;
-    return (await this.#call("complete", args))!;
+    return (await this.call("complete", args))!;
+  }
+}
+
+/** The ordinary client stays connectivity-only and bound to its original port. */
+export class MCPWorkerClient extends MCPTaskClient {
+  constructor(options: ClientOptions) {
+    super(options, "127.0.0.1:8787", task);
+  }
+}
+
+/** Dedicated one-shot inventory transport. No token issuance, discovery or retry. */
+export class InventoryMCPClient extends MCPTaskClient {
+  constructor(options: ClientOptions) {
+    super(options, "127.0.0.1:8789", inventoryTask);
+  }
+  async submit(args: {
+    task_type: "shift_log_inventory";
+    request_key: typeof INVENTORY_ONE_SHOT_KEY;
+  }) {
+    z.object({
+      task_type: z.literal("shift_log_inventory"),
+      request_key: z.literal(INVENTORY_ONE_SHOT_KEY),
+    })
+      .strict()
+      .parse(args);
+    return (await this.call("submit", args))!;
+  }
+  async complete(
+    p: Principal,
+    args: Lease & { state: "succeeded" | "failed"; result: string },
+  ) {
+    if (
+      args.result !== "shift_log_inventory_failed" &&
+      canonicalResult("shift_log_inventory", args.result) !== args.result
+    )
+      throw Error("inventory_result_rejected");
+    return super.complete(p, args);
   }
 }

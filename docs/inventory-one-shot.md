@@ -8,6 +8,8 @@ The caller supplies reviewed pins and a trusted `worker` callback returning an
 already authenticated `HubClient` and verified principal bound to the fresh
 runner scope. An authenticated SDK client can use the existing `MCPHubClient`.
 Transport/authentication setup and server enrollment must already be approved.
+The separate [dedicated entrypoint](inventory-end-to-end.md) composes the fixed
+authenticated HTTP path; the ordinary runtime still rejects inventory grants.
 The factory performs no OAuth login, issuance, credential discovery, exposure or
 permissive Hub fallback. Principal arguments do not replace server authentication.
 
@@ -27,7 +29,8 @@ The real path:
    authentication and capabilities before claim. Missing/inconclusive evidence
    fails closed; an existing listener is never used as a substitute.
 5. Checks inventory-only worker policy and scope, opens the durable worker journal
-   and calls the existing Adapter exactly once. Existing Hub authentication,
+   and follows one receipt with the existing Adapter until terminal completion,
+   without claiming another job. Existing Hub authentication,
    leases, fencing, receipt and replay checks remain authoritative.
 6. Aborts adapter work and stops only the owned child with SIGTERM and bounded
    SIGKILL if needed. Records `revoked` only after both boundaries confirm stop;
