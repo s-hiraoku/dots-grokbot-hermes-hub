@@ -17,6 +17,58 @@ TOOLSET = "hub_inventory_only"
 INPUT = "hub:shift-log-inventory:v1"
 MODEL = "gpt-6.1-sol"
 PROVIDER = "openai-codex"
+CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+API_MODE = "codex_responses"
+CREDENTIAL_SOURCE = "hermes-auth-store"
+
+
+def validate_inventory_runtime(runtime):
+    """Fail closed before constructing a client; never include credentials in errors."""
+    if not isinstance(runtime, dict) or (
+        runtime.get("provider") != PROVIDER
+        or runtime.get("base_url") != CODEX_BASE_URL
+        or runtime.get("api_mode") != API_MODE
+        or runtime.get("source") != CREDENTIAL_SOURCE
+        or runtime.get("auth_mode") != "chatgpt"
+        or not isinstance(runtime.get("api_key"), str)
+        or not runtime["api_key"]
+        or set(runtime)
+        - {"provider", "base_url", "api_mode", "source", "auth_mode", "api_key"}
+    ):
+        raise ValueError("inventory_provider_route_rejected")
+    return {
+        key: runtime[key] for key in ("provider", "base_url", "api_mode", "api_key")
+    }
+
+
+def resolve_inventory_runtime(resolve_credentials):
+    """Use the pinned official read-only OAuth resolver, without refresh or CLI adoption.
+
+    This runs only in the separately approved dedicated process. It proves route
+    provenance, not subscription entitlement or remaining included allowance.
+    """
+    try:
+        credentials = resolve_credentials(read_only=True)
+    except Exception:
+        raise ValueError("inventory_provider_credentials_unavailable") from None
+    if not isinstance(credentials, dict) or set(credentials) - {
+        "provider",
+        "base_url",
+        "api_key",
+        "source",
+        "last_refresh",
+        "auth_mode",
+    }:
+        raise ValueError("inventory_provider_route_rejected")
+    runtime = {
+        key: credentials.get(key)
+        for key in ("provider", "base_url", "api_key", "source", "auth_mode")
+    }
+    runtime["api_mode"] = API_MODE
+    validate_inventory_runtime(runtime)
+    return runtime
+
+
 LOCATIONS = (
     ("applications-spaced", "/Applications/Shift Log.app", ("/Applications",)),
     ("applications-camel", "/Applications/ShiftLog.app", ("/Applications",)),
@@ -228,6 +280,11 @@ def make_adapter_class(
         raise ValueError("inventory_tool_registration_failed")
 
     class InventoryAgent(agent_base):
+        def _try_refresh_codex_client_credentials(self, *, force=True):
+            # One approved credential snapshot: expiry/auth errors require a new
+            # supervised attempt, never a refresh or account adoption here.
+            return False
+
         def _inventory_assert(self):
             inspect_environment()
             entry = registry.get_entry(TOOL)
@@ -246,7 +303,13 @@ def make_adapter_class(
                 or self.run_budget_seconds != 60
             ):
                 raise ValueError("inventory_budget_rejected")
-            if self.model != MODEL or self.provider != PROVIDER:
+            if (
+                self.model != MODEL
+                or self.provider != PROVIDER
+                or self.base_url != CODEX_BASE_URL
+                or self.api_mode != API_MODE
+                or self._credential_pool is not None
+            ):
                 raise ValueError("inventory_runtime_rejected")
             if (
                 self._memory_store is not None
@@ -441,11 +504,7 @@ def make_adapter_class(
             if self._max_concurrent_runs != 1:
                 raise ValueError("inventory_concurrency_rejected")
             inspect_environment()
-            runtime = dict(resolve_runtime())
-            if runtime.get("provider") != PROVIDER or runtime.get("_fallback_notice"):
-                raise ValueError("inventory_provider_rejected")
-            runtime.pop("model", None)
-            runtime.pop("_fallback_notice", None)
+            runtime = validate_inventory_runtime(resolve_runtime())
             callbacks = {
                 key: value
                 for key, value in kwargs.items()
@@ -495,7 +554,8 @@ def load_official_adapter(store, *, workdir, expected_home):
     """Explicit binding only. No start/connect, env changes or credential handling."""
     from aiohttp import web
     from gateway.platforms.api_server import APIServerAdapter
-    from gateway.run import _resolve_runtime_agent_kwargs, _load_gateway_config
+    from gateway.run import _load_gateway_config
+    from hermes_cli.auth import resolve_codex_runtime_credentials
     from hermes_constants import get_hermes_home
 
     approved_home = Path(expected_home).resolve()
@@ -523,7 +583,7 @@ def load_official_adapter(store, *, workdir, expected_home):
         AIAgent,
         registry,
         create_custom_toolset,
-        _resolve_runtime_agent_kwargs,
+        lambda: resolve_inventory_runtime(resolve_codex_runtime_credentials),
         web,
         store,
         workdir=approved_workdir,

@@ -18,7 +18,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
-      - run: python3 -m unittest hermes_bridge.test_inventory_agent hermes_bridge.test_launch_manifest
+      - run: python3 -m unittest discover -s hermes_bridge -p 'test_*.py'
       - run: python3 -m pip install ruff==0.15.11
       - run: python3 -m ruff check hermes_bridge
       - run: python3 -m ruff format --check hermes_bridge
