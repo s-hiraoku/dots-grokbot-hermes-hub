@@ -4,6 +4,7 @@ import type { EventAPI } from "./subscriptions.ts";
 import type { TaskService } from "./store.ts";
 import type { Principal } from "./types.ts";
 import { createMCP } from "./mcp-core.ts";
+import type { OAuthResource } from "./oauth.ts";
 export * from "./mcp-core.ts";
 export function handler(
   hub: TaskService,
@@ -11,11 +12,27 @@ export function handler(
     req: IncomingMessage,
   ) => Promise<Principal | null> = async () => null,
   events?: EventAPI,
+  oauth?: OAuthResource,
 ) {
   return async (req: IncomingMessage, res: ServerResponse) => {
+    const path = new URL(req.url ?? "/", "http://localhost").pathname;
+    const metadata = oauth?.response(path, req.method ?? "");
+    if (metadata) {
+      res.writeHead(metadata.status, Object.fromEntries(metadata.headers));
+      res.end(await metadata.text());
+      return;
+    }
     const p = await authenticate(req);
     if (!p) {
-      res.writeHead(401);
+      res.writeHead(
+        401,
+        oauth
+          ? {
+              "WWW-Authenticate": oauth.challenge(),
+              "Cache-Control": "no-store",
+            }
+          : {},
+      );
       res.end();
       return;
     }

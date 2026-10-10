@@ -17,6 +17,7 @@ const policySchema = z
       .object({
         subject: z.string().min(1).max(200),
         kind: z.enum(["user", "service"]),
+        clientId: z.string().min(1).max(200).optional(),
         operations: z.array(operation).min(1),
         destination: z.literal("hermes").optional(),
         worker: z.literal("hermes").optional(),
@@ -63,6 +64,7 @@ export class PinnedJWTVerifier {
     kid: string;
     key: CryptoKey;
     policy: unknown;
+    requireClientId?: boolean;
     active: (subject: string, kind: "user" | "service") => Promise<boolean>;
     now?: () => number;
   }) {
@@ -79,6 +81,8 @@ export class PinnedJWTVerifier {
     )
       throw Error("invalid_verifier_policy");
     this.#policy = policySchema.parse(options.policy);
+    if (options.requireClientId && this.#policy.some((p) => !p.clientId))
+      throw Error("missing_client_binding");
     if (
       new Set(this.#policy.map((p) => p.subject)).size !== this.#policy.length
     )
@@ -147,6 +151,8 @@ export class PinnedJWTVerifier {
           nbf: z.number().int().optional(),
           iat: z.number().int().optional(),
           scope: z.string(),
+          azp: z.string().optional(),
+          client_id: z.string().optional(),
         })
         .passthrough()
         .parse(JSON.parse(new TextDecoder().decode(decode(body))));
@@ -164,6 +170,11 @@ export class PinnedJWTVerifier {
       const p = this.#policy.find((p) => p.subject === claims.sub);
       if (
         !p ||
+        (p.clientId &&
+          (!(claims.azp || claims.client_id) ||
+            (claims.azp !== undefined && claims.azp !== p.clientId) ||
+            (claims.client_id !== undefined &&
+              claims.client_id !== p.clientId))) ||
         !(await this.#active(p.subject, p.kind)) ||
         claims.exp <= Math.floor(this.#now() / 1000)
       )

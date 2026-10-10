@@ -7,6 +7,7 @@ import {
 import type { EventAPI } from "./subscriptions.ts";
 import { z } from "zod";
 import type { TaskService } from "./store.ts";
+import type { OAuthResource } from "./oauth.ts";
 import {
   RUN_ID_PATTERN,
   CallbackEndpointError,
@@ -66,7 +67,13 @@ export function createMCP(hub: TaskService, p: Principal, events?: EventAPI) {
   for (const [name, schema] of Object.entries(schemas))
     server.registerTool(
       name,
-      { description: `Agent Hub ${name}`, inputSchema: schema },
+      {
+        description: `Agent Hub ${name}`,
+        inputSchema: schema,
+        _meta: {
+          securitySchemes: [{ type: "oauth2", scopes: [`hub:${name}`] }],
+        },
+      },
       async (args: unknown) => {
         try {
           const result = await invoke(name, args);
@@ -120,9 +127,21 @@ export async function fetchMCP(
   request: Request,
   authenticate: (req: Request) => Promise<Principal | null> = async () => null,
   events?: EventAPI,
+  oauth?: OAuthResource,
 ): Promise<Response> {
+  const metadata = oauth?.response(
+    new URL(request.url).pathname,
+    request.method,
+  );
+  if (metadata) return metadata;
   const p = await authenticate(request);
-  if (!p) return new Response(null, { status: 401 });
+  if (!p)
+    return new Response(null, {
+      status: 401,
+      headers: oauth
+        ? { "WWW-Authenticate": oauth.challenge(), "Cache-Control": "no-store" }
+        : {},
+    });
   if (new URL(request.url).pathname !== "/mcp" || request.method !== "POST")
     return new Response(null, { status: 405 });
   return createMcpHandler(() => createMCP(hub, p, events)).fetch(request);
