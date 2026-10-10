@@ -6,19 +6,11 @@ HABは、個人文脈を持つDots（スタローン）、クラウドで働くG
 
 ## 全体図
 
-以下は目標構成です。矢印は本番接続済みを意味しません。
+2026-10-10時点。**実線は既存設定・接続の本人報告、破線は計画・未接続**です。青い枠はコード実装済みで、本番稼働を意味しません。既存model MCPとHAB Hubは別サービスです。
 
-```mermaid
-flowchart LR
-  U[利用者] --> D[Dots / 個人文脈と相談]
-  U --> G[Grok Bot / クラウドの仕事]
-  D -. 認証済み依頼・結果 .-> H[共通Agent Hub / Mac + SQLite]
-  G -. 認証済み依頼・結果 .-> H
-  L[Hermes / Local Agent] -. 外向きclaim・進捗・結果 .-> H
-  A[Auth0 / 計画中の認証] -. 主体・scope検証 .-> H
-  T[Tailscale / Hub用経路は未決定] -. HTTPS入口 .-> H
-  L -. 将来の限定実行 .-> C[Claude Code / Codex / Cursor]
-```
+![HABの最新概要図。既存GrokとFunnel/model MCPは本人報告で接続済み。Dots、Auth0、HAB Hub、Hermesの今回の実接続は未完。](docs/diagrams/hab-overview.png)
+
+[通信方向・認証責任の詳細図と確認範囲](docs/hab-topology.md) · [拡大用SVG](docs/diagrams/hab-overview.svg) · [Mermaidソース](docs/diagrams/hab-overview.mmd)
 
 ## 現在可能なこと
 

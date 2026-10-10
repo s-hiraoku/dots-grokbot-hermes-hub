@@ -1,0 +1,25 @@
+flowchart TB
+  D["Dots / Stallone<br/>Personal context<br/>ChatGPT MCP unverified / owner login pending"]
+  G["Grok Bot / Cloud Worker<br/>Existing MCP works: owner report<br/>Hub unconnected"]
+  F["Tailscale Funnel / public HTTPS<br/>Existing 443 /mcp<br/>Hub path or port undecided"]
+  subgraph MAC["Mac mini"]
+    M["Existing model MCP / 8765<br/>Separate from HAB / no-token denial: owner report"]
+    H["HAB Hub / loopback 8787 + SQLite<br/>JWT + client + scope enforced here<br/>Code implemented / live wiring incomplete"]
+    R["Hermes isolated Runs candidate<br/>Profile + dependencies measured: owner report<br/>Adapter + temporary Bearer helper: code<br/>Actual key / API / model / roundtrip unrun"]
+  end
+  A["Auth0 / planned identity provider<br/>Tokens issued to clients / not a traffic proxy"]
+  E["Future development resources<br/>Claude Code channel mock / Codex tooling<br/>Cursor owner expectation / Cua later local candidate / startup incomplete"]
+  G -->|"HTTPS MCP / existing service auth: owner report"| F
+  F -->|"Existing /mcp proxy: owner report"| M
+  D -.->|"Future HTTPS MCP"| F
+  F -.->|"Hub route not approved"| H
+  H -.->|"Task response to outbound adapter"| R
+  R -.->|"Adapter claim / progress / results to Hub"| H
+  H -.->|"Fetch pinned JWKS / verify tokens from clients"| A
+  R -.->|"Future scoped execution"| E
+  classDef confirmed fill:#ecfdf5,stroke:#15803d,color:#0f172a
+  classDef code fill:#eff6ff,stroke:#1d4ed8,color:#0f172a
+  classDef planned fill:#fffbeb,stroke:#b45309,color:#0f172a
+  class G,F,M confirmed
+  class H,R code
+  class D,A,E planned
