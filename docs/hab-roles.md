@@ -15,6 +15,13 @@
 | Cua（後続候補）    | 将来の限定computer/browser操作                                            | 起動未完。上記開発toolの接続やGrokの操作能力とは別の**後続検証**                                                                                                                              |
 | Agent Hub          | 依頼・policy routing・進捗・結果・監査                                    | 限定タスク、ping/pong、Auth0検証部品、Events、停止・照合は**実装済み**。本番Auth0設定・entrypoint配線・公開経路は未完                                                                         |
 
+## ShiftLogをHABの機能として扱う方針
+
+ShiftLogは独立repoのまま、HABの**作業記憶・再開context**機能として統合する計画です。
+既存の `shift_log_inventory` は導入候補metadataの診断であり、この機能の代わりではありません。
+実コード読取りに基づく境界・port競合・権限は[ADR](hab-decisions.md#shiftlog機能の接続境界)に記録します。
+収集・履歴・設定の所有はShiftLogに残し、Hubが自動的に収集を有効化したり個人記憶を全agentへ複製したりしません。
+
 ## 現在の限定機能
 
 - `connectivity_check`：固定テキスト応答。一般的な会話・コマンド実行ではありません。
