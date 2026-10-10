@@ -1,5 +1,7 @@
 # Hosting and MCP Events status
 
+Current live candidate: Mac + SQLite, with existing Tailscale reuse under review. Worker/D1/Sites remain portability work, not the selected pilot deployment. See [HAB ADR](hab-decisions.md).
+
 ## Runtime choice and implemented migration
 
 The Sites portable setup guide specifies Cloudflare Workers-compatible server output and a 128 MB isolate budget. The storage guide requires D1 prepared statements, one statement per prepare, transactional batches, schema in `db/schema.ts` and generated migrations. Local-only work skips Site registration and publishing.
@@ -20,7 +22,7 @@ The adapter now renews leases while waiting for Runs create/get, polls known run
 
 The typed standard Runs HTTP client is implemented in `src/hermes-runs.ts` and tested only against mock APIs. Its activation still requires an approved isolated profile and effective tool/memory/durable-idempotency evidence. Standard API requires its own key even on loopback. Desktop UI backend authentication and changing port must not be reused. `toolIsolationVerified`/`durableIdempotency` are injected mock contract flags; they do not constitute a real security attestation. Actual capabilities must rule out memory-only idempotency fallback.
 
-Cancellation keeps the task's execution slot even after a mock terminal confirmation. An authorized server operation to verify reconciliation and release the slot is still required. Do not allow requester arguments or an unverified driver to release it. Actual Stop semantics, endpoint/status normalization and hosted credential revocation remain untested.
+Cancellation keeps the task's execution slot until trusted reconciliation. An internal operator operation now closes the gate only after proving the exact fixed successful result on the original run boundary; general failed/cancelled terminal release remains unimplemented. Do not allow requester arguments or an unverified driver to release it. Actual Stop semantics, endpoint/status normalization and hosted credential revocation remain untested.
 
 ## MCP Events preparation implemented
 
@@ -28,15 +30,9 @@ Cancellation keeps the task's execution slot even after a mock terminal confirma
 
 `PinnedCallbackTransport` is a Node-only preparation boundary, tested with injected resolver/connector: only exact approved HTTPS URLs, no URL credentials, fresh DNS/public-IP classification on every attempt, all resolved addresses checked, pinned address plus original TLS hostname, bounded callback response and redirect rejection. Tests perform no real DNS lookup or callback connection. This Node egress implementation is not evidence of equivalent Worker egress; a hosted connection-time address/pinning boundary is still required.
 
-Before advertising formal events support, implement and test:
+Authenticated server discovery, events/list/subscribe/unsubscribe, durable encrypted subscriptions, fenced delivery, expiry/revocation/refresh checks and finite retries are now implemented and fixture-tested. They are advertised only when an operator injects EventAPI; default entrypoints inject none. Cursor replay is unsupported. See [local integration](local-integration.md) for the authoritative current contract.
 
-- Authenticated server/discover, events/list, events/subscribe and events/unsubscribe with strict principal/task filters and deterministic subscription identity.
-- Durable subscriptions, encrypted/approved signing-secret references and per-subscription delivery receipts in the same authoritative D1 database; no second task-state DB.
-- Expiry/refresh/revocation/unsubscribe races, replay cursors and per-delivery authorization. Outbox receipts alone are not a subscription lifecycle.
-- Approved fixed callback targets and verified hosted egress. Verification and delivery must use the same SSRF/redirect safeguards.
-- Receiver crash/ack-loss integration, delivery-state restart and real signatures through an approved callback/plugin connection.
-
-No events capability is advertised. No live subscription or callback secret is created, and nothing in the tests sends to a real callback.
+Real callback/plugin connection, hosted connection-time egress, receiver crash/ack-loss verification and resident delivery remain gates. No live subscription or callback secret is created by the default application, and tests do not contact real receivers.
 
 ## Review corrections and remaining runtime decisions
 
@@ -44,4 +40,4 @@ Lease validity is evaluated inside the updating SQL statement, using SQLite's dr
 
 The current pinned Node HTTPS connector cannot be copied into Workers unchanged. [Workers HTTPS compatibility](https://developers.cloudflare.com/workers/runtime-apis/nodejs/https/) implements HTTPS over fetch and does not provide the same connection/TLS options. [Workers DNS compatibility](https://developers.cloudflare.com/workers/runtime-apis/nodejs/dns/) does not implement `lookup`. Choose an approved fixed Node egress relay, or separately prove a Workers TLS connection implementation that pins a validated address while verifying the original hostname. Neither choice is implemented or authorized here; an ordinary fetch preceded by DNS validation would not establish the required connection-time guarantee.
 
-The registry also has official split MCP SDK packages with modern discovery support. This branch still uses the existing monolithic SDK and does not claim formal MCP Events discovery support. Migrate and test the SDK contract before advertising Events capabilities. No unused replacement SDK dependencies are committed.
+The server uses official split MCP server and Node HTTP packages; the pinned monolithic SDK client is retained for legacy-client fixture compatibility. Modern discovery and Events routing are tested locally. This does not establish a hosted deployment or real Events receiver interoperability.

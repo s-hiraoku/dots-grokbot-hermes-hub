@@ -1,19 +1,74 @@
-# Dots · Grok Bot · Hermes Agent Hub
+# HAB — Hiraoku Agent Base
 
-Local foundation for mediating requests, assignments, progress and results. Each agent retains its own decisions. No existing jobs, calendars, mail, memory, cron or agent configuration are changed.
+HABは、個人文脈を持つDots（スタローン）、クラウドで働くGrok Bot、Macで実験・開発するHermesを、共通のAgent Hubでつなぐための基盤です。依頼・担当・進捗・結果を仲介し、それぞれのエージェントが持つ判断や既存の仕事を尊重します。Claude Code・Codex・Cursorも、将来の開発実行手段として位置づけます。
 
-## Reproduce
+この公開repoは、Hubのコードに加え、HAB全体の設計・判断・接続状況を管理します。個人のメール・予定・記憶・会話、秘密値、実際の接続設定や運用ログは管理しません。repoは同じ履歴を保持したまま[hiraoku-agent-base](https://github.com/s-hiraoku/hiraoku-agent-base)へ改名しました。
 
-Node 24: `npm ci && npm run typecheck && npm run lint && npm test`.
+## 全体図
 
-Tests exercise a fixed requester → HTTP MCP → async task service → outbound adapter → mock independent Runs roundtrip with either SQLite or local Worker/D1. They also exercise lease renewal/failure, durable recovery, simultaneous claims, cancelled execution gating, transactional audit/outbox, and offline callback signatures/retries. Miniflare telemetry and Worker outbound access are disabled. `typecheck` checks the production TypeScript implementation and schema, not only declarations.
+2026-10-10時点の**確認済み経路（本人報告）**です。既存model MCPはHAB Hubとは別サービスです。モデル一覧取得・認証なし拒否の報告は、Hub接続やmodel実行・費用枠の確認を意味しません。
 
-`node src/server.ts` starts a loopback Node HTTP MCP endpoint that returns 401 until an explicitly configured verifier is supplied. `npm run build` produces the analogous Worker bundle in ignored `dist/`; its default verifier also denies all requests. Neither entry point mints credentials or provides an anonymous mode.
+<!-- hab-diagram: hab-current -->
 
-Only `connectivity_check` is accepted, with an idempotency key and no user text, agent name, shell command, URL or personal data. The fixed successful output is `Agent Hub connectivity check completed.` Hermes concurrency is one, including unresolved cancelled runs. Tests never contact a real agent or callback.
+```mermaid
+%%{init: {"theme":"neutral","look":"classic","flowchart":{"curve":"linear","wrappingWidth":280}}}%%
+flowchart LR
+  G["Grok Bot<br/>Cloud Worker"]
+  F["Tailscale Funnel<br/>Public HTTPS / 443"]
+  subgraph MAC["Mac mini"]
+    M["Existing model MCP / 8765<br/>Not HAB Hub"]
+  end
+  G <-->|"MCP request / response"| F
+  F <-->|"Existing /mcp proxy"| M
+  classDef confirmed fill:#ecfdf5,stroke:#15803d,color:#0f172a
+  class G,F,M confirmed
+```
 
-The typed Hermes standard Runs driver is verified against a temporary mock HTTP API, including lost-admission recovery. It remains disabled for real instances until trusted execution-isolation evidence and runtime authentication are approved. See [first-connection contract](docs/hermes-connection.md) and [fixed-pilot compatibility](docs/fixed-pilot.md).
+[PNG fallback](docs/diagrams/hab-current.png) · [HABの目標構成・通信方向・認証責任](docs/hab-topology.md)
 
-See [architecture and approval gates](docs/architecture.md) and [hosting and Events status](docs/migration-plan.md). This is locally validated code, not a deployed three-agent connection.
+Hub・Hermesの限定接続は準備段階、Dots/ChatGPT MCPは未検証です。目標構成は詳細文書で確認済み経路から分けて示します。
 
-The next local integration layer adds pinned JWT resource-server verification, atomic subject-specific result/notification grants, protocol 2026 MCP Events, encrypted persistent subscriptions and fenced delivery retries, a bounded worker loop and evidence-based reconciliation. See [local integration and bundled connection approvals](docs/local-integration.md). No real credentials, plugin/tunnel registration or resident process are installed.
+## 現在可能なこと
+
+「実装済み」はコードとローカルfixtureの確認、「実接続確認済み」は対象の実サービスでの確認を指します。本人報告は独立した実測とは区別します。
+
+| 項目                                                                                       | 状態・根拠                                                                                                                       |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| 永続タスクキュー、HTTP MCP、lease/fencing、監査・outbox、停止・照合                        | **実装済み**。SQLiteとローカルD1で失敗系を検証                                                                                   |
+| 固定テキストの`connectivity_check`、固定候補metadataの`shift_log_inventory`、診断ping/pong | **実装済み**。信頼済みpolicyで個別に許可する限定契約。自由入力・任意shellなし                                                    |
+| JWT/Auth0 resource-server、OAuth discovery、Events、限定キー管理、Hermes隔離bridge         | **実装済み**。本番entrypointへの認証配線と実接続は未完                                                                           |
+| Hermesの今回のinventory接続                                                                | **準備済み／実接続未確認**。専用profile・code・dependency bundleと本人Terminalの測定報告あり。実キー/API/model起動・往復は未実施 |
+| 既存の別MCPとTailscale/Grok                                                                | **本人報告による実接続確認済み**。認証なし拒否も報告済み。HAB Hubへの接続やHubのOAuth成功を証明しない                            |
+| Dots ↔ Hub ↔ Grok本番、開発実行手段のHub接続                                               | **計画**。Cursor利用可能性は本人見込み。Claude Channelはmock、Cua起動は未完                                                      |
+
+実装baselineのCIではNode 292件・Python 23件、lint・typecheck・build・Ruffが成功し、依存auditは0件でした。これは本番接続の受入れではありません。最新のゲートは[MVP受入れ表](docs/mvp-acceptance.md)で管理します。
+
+## 残しておく7項目
+
+| 文書                                          | 内容                                                           |
+| --------------------------------------------- | -------------------------------------------------------------- |
+| このREADME                                    | HABの目的、全体図、現在可能なこと、入口                        |
+| [設計思想](docs/hab-principles.md)            | 個人文脈・Cloud Worker・Local Agentの分業、疎結合、費用制約    |
+| [役割と機能](docs/hab-roles.md)               | Dots／Grok／Hermes／Claude Code／Codex／Cursorの担当と接続状況 |
+| [処理の流れ](docs/hab-workflow.md)            | 依頼 → 振分け → 承認 → 実行 → 結果、失敗・停止・照合           |
+| [セキュリティ](docs/hab-security.md)          | Auth0、Tailscale、権限、秘密、停止と公開境界                   |
+| [設計判断記録（ADR）](docs/hab-decisions.md)  | 採用理由、不採用・保留・未決定案                               |
+| [競合比較とロードマップ](docs/hab-roadmap.md) | 一次資料に基づく参考実装と段階的な接続計画                     |
+
+## ローカル再現
+
+Node 24以上で実行します。fixtureは実エージェントや本番callbackへ接続しません。
+
+```sh
+npm ci
+npm run lint
+npm run typecheck
+npm test
+python3 -m unittest hermes_bridge.test_inventory_agent hermes_bridge.test_launch_manifest
+```
+
+`node src/server.ts` はloopback HTTP MCPを起動しますが、既定の認証は全件拒否です。Auth0・peer registry・必要なserviceを明示的に配線するまで本番Hubとして公開しません。`npm run build` はWorker版を生成します。D1/Workerは移植性の検証対象で、現在の本番方針はMac＋SQLiteです。
+
+## 技術文書
+
+[Hub内部設計](docs/architecture.md)、[認証・Events・worker](docs/local-integration.md)、[Auth0境界](docs/auth0-boundary.md)、[ping/pong](docs/ping-pong-mvp.md)、[inventory MVP](docs/mvp-inventory.md)、[Hermes接続](docs/hermes-connection.md)、[固定pilot履歴](docs/fixed-pilot.md)、[import隔離](docs/hermes-import-boundary.md)、[一時キー](docs/local-hermes-key.md)、[永続停止](docs/durable-stop-gate.md)、[移植とEvents](docs/migration-plan.md)、[Auth0アカウント手順](docs/auth0-account-step.md)を参照してください。実運用の手順・値は承認後に非公開で管理します。

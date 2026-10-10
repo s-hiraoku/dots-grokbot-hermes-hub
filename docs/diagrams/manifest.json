@@ -1,0 +1,21 @@
+{
+  "renderer": "@mermaid-js/mermaid-cli@12.0.0",
+  "mermaid": "12.1.0",
+  "puppeteer": "25.13.0",
+  "diagrams": [
+    {
+      "source": "README.md",
+      "id": "hab-current",
+      "image": "docs/diagrams/hab-current.png",
+      "mermaidSHA256": "427f0ee97524948cc684b2491d78bb8031aa463be8e263664fc487f1a7016e0d",
+      "imageSHA256": "2a30433e7237d57ca3d1dc39644de5ba4053058cffc66070d8f5fd5ee4e8ddc6"
+    },
+    {
+      "source": "docs/hab-topology.md",
+      "id": "hab-target",
+      "image": "docs/diagrams/hab-target.png",
+      "mermaidSHA256": "8a599fef2172695af03d79b7a26948cec1c7a85474b00061d089634fcb7b3391",
+      "imageSHA256": "b777dcac2b41c7df3673d00c01f68be927da74bd5e04b9fe0dcac0f3b7e7d58e"
+    }
+  ]
+}

@@ -16,7 +16,7 @@ The mock HTTP roundtrip verifies requester submit → HTTP MCP → adapter → s
 2. Approve standard API authentication creation and runtime injection into this adapter only. Confirm key scope is the isolated API profile and document revocation; never copy Desktop authentication or publish the value.
 3. Measure effective API agent tools as zero at the execution boundary, memory disabled, history isolated, fixed runtime model/provider, no fallback, exact source version, and durable idempotency/retention. Implement a trusted inspector tied to those measured facts; do not substitute empty request `tools` or a prompt promise.
 4. Approve one fixed connectivity request to that API and its configured model provider: fixed text, no personal input, independent new session, concurrency one. Poll only its returned ID, and retrieve the Hub result explicitly with the authorized requester principal.
-5. Separately approve production Hub hosting/private authentication and verified subject/scope mappings. Sites service credentials/identity compatibility remains unverified; absent that boundary, both production entry points stay 401.
+5. Separately approve production Hub hosting/private authentication and verified subject/scope mappings. The current candidate is Mac/SQLite with separately approved ingress and Auth0. Sites service identity remains unverified and deferred. Without explicit authentication wiring, both production entrypoints stay 401.
 
 Formal Events subscription/persistent delivery and Worker callback egress remain a separate decision described in [migration status](migration-plan.md). No live callback is needed for this first explicit-get roundtrip.
 
