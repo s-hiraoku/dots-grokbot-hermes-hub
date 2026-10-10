@@ -13,3 +13,5 @@ dist/
 .wrangler/
 
 config/*.local.json
+__pycache__/
+.ruff_cache/

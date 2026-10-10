@@ -13,7 +13,7 @@ Status: local fixed diagnostic contract implemented; live MVP NOT accepted. Hub/
 | Grok wake | Real fixed-target transport absent. Confirm routine instruction, URL, secret handling, usage and cancellation. HTTP 200 is acceptance only. Account-shared connection is not exclusive Bot identity. |
 | Dots reply | Explicit polling works in mocks; automatic reception and actual invocation unverified. No recurring polling configured. |
 | Failure/stop | TTL, correlation, dedup, epoch gates, restart and one-attempt outbox verified. Sent bytes cannot be retracted. Unknown wake receipt parks without auto-retry. |
-| Hermes / Claude | Separate candidate work NOT integrated or accepted; a direct collector is not evidence of actual Hermes execution. |
+| Hermes / Claude | Reviewed Hermes Agent Runs/inspector/Python bridge sources and mocks are integrated; the one-task key helper is local-only. Real isolated process/API/model execution NOT accepted. Claude and direct-collector candidates remain unintegrated. |
 | Cost | Auth0 must remain USD 0 after trial. Account's post-trial entitlements need owner confirmation; no paid feature or upgrade fallback. Model/API/routine charges need independent approval. |
 
 ## Auth0 free-only operation plan
